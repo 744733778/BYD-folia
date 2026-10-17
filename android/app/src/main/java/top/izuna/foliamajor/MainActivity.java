@@ -55,6 +55,12 @@ public class MainActivity extends BridgeActivity {
         WebSettings settings = webView.getSettings();
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        // 车机（比亚迪 DiLink 等）全屏 + 沉浸式下，Capacitor 默认的 useWideViewPort(true)
+        // 可能让 WebView 布局视口大于实际视觉视口（兼容窗口 / 显示比例），主内容据此
+        // 排版跑出屏幕只剩背景和 fixed 浮动按钮。强制单一视口：布局视口 = 视觉视口，
+        // 菜单 / 选项卡 / 设置按屏幕实际尺寸重排，不再偏移出屏。
+        settings.setUseWideViewPort(false);
+        settings.setLoadWithOverviewMode(false);
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {

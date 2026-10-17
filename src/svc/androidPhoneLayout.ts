@@ -70,9 +70,46 @@ export const installAndroidPhoneFitPreference = (): void => {
 let phoneFitViewportListenerInstalled = false;
 
 /**
+ * 车机（比亚迪 DiLink 等）在全屏 + 沉浸式 + viewport-fit=cover 下，系统常把 App
+ * 放进一个「兼容窗口 / 显示比例」：WebView 的布局视口（window.innerWidth/Height）
+ * 大于实际视觉视口（visualViewport）。于是主内容按大布局视口排版跑出屏幕——
+ * 背景色铺满、fixed 定位的浮动按钮正常、流式主内容（菜单 / 选项卡 / header）整个
+ * 偏移出屏只剩一点边缘。这里把根元素钳到视觉视口尺寸，让 100% / 100vw 的内容
+ * 收回到屏幕内，菜单与设置重新可见。mismatch 消失（退出兼容窗口）时恢复。
+ *
+ * visualViewport 在 Android WebView 与 Chromium 均可用；Electron / Web 无差异时不动。
+ */
+const alignRootToVisualViewport = (): void => {
+    const visual = window.visualViewport;
+    const root = document.documentElement;
+    if (!visual || typeof visual.width !== 'number' || typeof visual.height !== 'number') {
+        root.style.width = '';
+        root.style.height = '';
+        return;
+    }
+    const lw = window.innerWidth;
+    const lh = window.innerHeight;
+    const vw = visual.width;
+    const vh = visual.height;
+    const hMismatch = Math.abs(lw - vw) > 1;
+    const vMismatch = Math.abs(lh - vh) > 1;
+    if (hMismatch) {
+        root.style.width = `${vw}px`;
+    } else {
+        root.style.width = '';
+    }
+    if (vMismatch) {
+        root.style.height = `${vh}px`;
+    } else {
+        root.style.height = '';
+    }
+};
+
+/**
  * 分屏 / 旋转 / 窗口尺寸变化时，Activity 不会重建（见 AndroidManifest 的 configChanges），
  * 而是 WebView 直接 resize。这里监听视口变化，按当前宽高比动态更新 orientation 并重新
- * apply，保证全屏与分屏两种形态下紧凑布局（所有可交互元素收进视口）持续生效。
+ * apply，同时把根元素对齐到视觉视口，保证全屏与分屏两种形态下紧凑布局（所有可交互
+ * 元素收进视口）持续生效。
  *
  * 用 requestAnimationFrame 合并连续 resize，避免分屏拖动时高频重复设置属性。
  */
@@ -91,11 +128,23 @@ const installPhoneFitViewportListener = (): void => {
                 window.innerWidth > window.innerHeight ? 'landscape' : 'portrait';
             applyAndroidPhoneFit(enabled, orientation);
             syncAndroidPhoneFitNative(enabled, orientation);
+            // 布局视口与视觉视口错位（车机兼容窗口）时，钳根元素到视觉视口。
+            alignRootToVisualViewport();
         });
     };
 
     window.addEventListener('resize', applyForViewport);
     window.addEventListener('orientationchange', applyForViewport);
+
+    const visual = window.visualViewport;
+    if (visual) {
+        // 视觉视口的缩放 / 滚动也会改变可视区域，单独再挂一次。
+        visual.addEventListener('resize', applyForViewport);
+        visual.addEventListener('scroll', applyForViewport);
+    }
+
+    // 启动时布局视口可能已经错位，主动对齐一次（等首帧布局稳定）。
+    applyForViewport();
 };
 
 /**
