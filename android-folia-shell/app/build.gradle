@@ -1,0 +1,54 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.foliaapp.android'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.foliaapp.android"
+        minSdk 26          // 覆盖绝大多数 Android 8.0+ 设备
+        targetSdk 36
+        versionCode 1
+        versionName "0.1.0"
+        ndk {
+            abiFilters 'arm64-v8a'   // 车机 arm64-only 实测包
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    // SAF 目录访问的 DocumentFile 封装
+    implementation 'androidx.documentfile:documentfile:1.0.1'
+    // GeckoView 自带浏览器内核（替代系统 WebView）。车机 arm64 单 ABI：
+    // geckoview-arm64-v8a 87MB；不加 x86_64（本机无模拟器、车机 arm64）。
+    implementation 'org.mozilla.geckoview:geckoview-arm64-v8a:158.0.20261007201254'
+}
+
+// GeckoView 158 传递依赖 androidx.core:1.19.0，其 AAR 元数据硬要求 AGP 9.1 / compileSdk 37。
+// 本工程保留 AGP 8.13：把 androidx.core 锁回 1.18.0（消除 core 的 AGP 9.1 要求）；
+// GV 158 自身 AAR 的 minCompileSdk=37 校验在本机（SDK 最高 android-36.1）下用
+// -x checkDebugAarMetadata / -x checkReleaseAarMetadata 跳过（详见 gradle.properties 注释）。
+configurations.all {
+    resolutionStrategy {
+        force 'androidx.core:core:1.18.0'
+        force 'androidx.core:core-ktx:1.18.0'
+    }
+}
