@@ -69,3 +69,10 @@ GeckoView 不支持 `addJavascriptInterface`，采用五段链路：
 
 - **更新 WebExtension 需升扩展版本号**：GeckoView 内置扩展随应用数据持久化，仅改文件不会重装。
 - APK 体积约 200MB（GeckoView 原生库未压缩打包，属内核固有）。
+
+## 致谢
+
+本移植版基于开源项目构建，向以下作者与项目致以感谢：
+
+- **folia 原作者 [chthollyphile](https://github.com/chthollyphile)**：Folia 音乐播放器（[folia-major](https://github.com/chthollyphile/folia-major)）的核心开发与维护，炫酷的逐字歌词、可视化与播放体验均源于该项目。
+- **[Timingyyds](https://github.com/Timingyyds)** 的 [folia-android](https://github.com/Timingyyds/folia-android)：安卓端目录选择（SAF 文件夹实现）等思路，本项目从中吸取了不少参考。
