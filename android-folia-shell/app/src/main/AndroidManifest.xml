@@ -3,7 +3,11 @@
 
     <application
         android:allowBackup="false"
-        android:label="foliaAPP"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:appCategory="audio"
+        android:largeHeap="true"
+        android:hardwareAccelerated="true"
         android:theme="@style/Theme.Folia"
         android:usesCleartextTraffic="true">
 
@@ -17,9 +21,56 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- 声明成"音乐播放器"（照 APlayer 的做法）：车机/语音助手找默认音乐应用时，
+                 查的就是 MUSIC_PLAYER + APP_MUSIC，不查就只有普通 LAUNCHER 条目。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.MUSIC_PLAYER" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.APP_MUSIC" />
+            </intent-filter>
         </activity>
+
+        <!-- 播放前台服务：仅播放中 startForeground(mediaPlayback)
+             MediaBrowserService 的 intent-filter 是车机识别"媒体应用"的入口——只挂
+             MediaSession 的应用在 DiLink 这类车机上常常分不到方向盘按键。
+
+             注意：**不要**声明 androidx.media3 的 MediaSessionService/MediaLibraryService。
+             0.1.9 从 LynMusic 抄了那两个 action，但我们并不是 Media3 的实现：系统/车机按
+             Media3 协议 bind 过来时拿不到 Media3 的 Token，会把这个包标成"坏掉的媒体应用"，
+             反而连 legacy 的 MediaBrowserService 一起不认——这正好对上"状态栏不显示 Folia"。 -->
+        <service
+            android:name=".PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <!-- 车机把方向盘按键作为 MEDIA_BUTTON 广播发出来时的入口。
+             必须用自己的接收器：androidx 的 MediaButtonReceiver 只会把 Intent 转给
+             MediaBrowserService 的 onStartCommand，事件到那里就没了。 -->
+        <receiver
+            android:name=".MediaKeyReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
     </application>
 
     <!-- SAF 目录访问不需要存储权限；仅保留网络用于在线源（本版账号已砍，可留可删） -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 曲库走 MediaStore：只需要"音频"；"图片"用于读同目录 cover.jpg 封面 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- 可选：老车机/特殊 ROM 上按绝对路径读同名 .lrc 歌词（不授权也能放歌，只是没歌词） -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- 前台服务（媒体播放）+ 唤醒锁 + Android 13+ 通知运行时权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

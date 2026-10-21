@@ -14,6 +14,8 @@ declare global {
   /** 自部署平台 docker / vercel / cloudflare；其他类别为空串。 */
   const __BUILD_HOST__: string;
   const __APP_VERSION__: string;
+  /** 构建时刻（ISO 8601）。本地构建没有 commit 可认时，用它区分前端版本。 */
+  const __BUILD_TIME__: string;
   const __APP_VERSION_LABEL__: string;
   const __APP_RELEASE_CHANNEL__: string;
   const __DOCKER_STACK_VERSION__: string;

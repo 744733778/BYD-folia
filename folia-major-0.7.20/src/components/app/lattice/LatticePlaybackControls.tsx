@@ -46,8 +46,6 @@ export default function LatticePlaybackControls({
 
     return (
         <div
-            // 思索靠这个属性认出整条控制条。类名会随样式重构改名，属性不会 —— 见 ponderSelectorContract。
-            data-ponder="lattice-chrome"
             className={`lattice-chrome ${revealed ? 'is-revealed' : ''}`}
             role="group"
             aria-label={t('home.latticePlaybackControls')}

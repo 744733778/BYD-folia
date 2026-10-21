@@ -211,7 +211,7 @@ const getLocalGridViewCoverSource = (songs: LocalSong[]): string | undefined => 
         return undefined;
     }
 
-    const localCoverUrl = getLocalCoverAssetUrl(preferredSong.localCoverAssetId, 512) || undefined;
+    const localCoverUrl = preferredSong.nativeCoverUrl || getLocalCoverAssetUrl(preferredSong.localCoverAssetId, 512) || undefined;
     if (preferredSong.useOnlineCover) {
         return preferredSong.onlineMetadata?.coverUrl || localCoverUrl;
     }

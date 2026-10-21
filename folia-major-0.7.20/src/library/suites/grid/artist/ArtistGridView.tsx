@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { SongResult, Theme } from '../../../../types';
 import { getSizedCoverUrl } from '../../../../utils/coverUrl';
 import { getSongCoverUrl } from '../../../../services/onlineMusic/songMetadata';
+import { isNativeAndroidShell } from '../../../../services/foliaExtensionBridge';
 import type { LibraryArtistResource } from '../../../core/contracts/artist';
 import type { LibraryPlaybackPort } from '../../../core/contracts/ports';
 import type { LibraryDeclaredActions } from '../../../core/contracts/suite';
@@ -331,6 +332,8 @@ const ArtistGridView: React.FC<ArtistGridViewProps> = ({
     const squareCards = useGridViewSettingsStore(state => state.gridViewSquareCards) && fullBleedCover;
     const minCardScale = useGridViewSettingsStore(state => state.gridViewMinCardScale);
     const minCardOpacity = useGridViewSettingsStore(state => state.gridViewMinCardOpacity);
+    // 安卓壳：入场/飞入动画降级（同 GridView 的说明），撤 willChange 合成层。
+    const nativeShell = useMemo(() => isNativeAndroidShell(), []);
     const closeBtnBg = isDaylight ? 'bg-black/5 hover:bg-black/10 text-black/60' : 'bg-black/20 hover:bg-white/10 text-white/60';
     const cardBg = isDaylight ? 'bg-white/60 border border-white/30' : 'bg-zinc-900/60 border border-white/10';
 
@@ -1090,13 +1093,13 @@ const ArtistGridView: React.FC<ArtistGridViewProps> = ({
             // Index 2..: Song & Album Polaroid cards
             const isSongCard = !!item.rawTrack;
             const cardMode = isSongCard ? 'tracks' : 'collection';
-            const animateEntrance = shouldAnimateItemEntrance(String(item.id));
+            const animateEntrance = !nativeShell && shouldAnimateItemEntrance(String(item.id));
             // 「移形换影」fly-in: every non-intro card arrives from outside the
             // viewport along its radial from the avatar cluster, staggered with
             // an ease-out distance curve plus a deterministic jitter.
             // 屏外的卡不参与入场：渲染环带缓冲，那些卡看不见，却要各付一次动画。
             const cardOnScreen = initialDist <= clipRadius;
-            const isMorphFlyIn = Boolean(morphPlan && idx >= 2 && cardOnScreen);
+            const isMorphFlyIn = Boolean(!nativeShell && morphPlan && idx >= 2 && cardOnScreen);
             const morphFlyIn = isMorphFlyIn
                 ? collectionMorphFlyIn(
                     { x: coord.baseX, y: coord.baseY },
@@ -1117,7 +1120,7 @@ const ArtistGridView: React.FC<ArtistGridViewProps> = ({
                     className="absolute select-none pointer-events-auto"
                     style={{
                         transformOrigin: 'center center',
-                        willChange: 'transform, opacity',
+                        willChange: nativeShell ? 'auto' : 'transform, opacity',
                         display: initialDist > clipRadius ? 'none' : undefined,
                         transform: `translate(${coord.baseX}px, ${coord.baseY}px) scale(${initialScale})`,
                         opacity: initialDist > clipRadius ? 0 : initialOpacity,
@@ -1209,6 +1212,7 @@ const ArtistGridView: React.FC<ArtistGridViewProps> = ({
         shouldAnimateItemEntrance,
         morphPlan,
         morphFlyInReach,
+        nativeShell,
     ]);
 
     const progressiveLoading = deriveProgressiveLoadingState(
@@ -1220,7 +1224,7 @@ const ArtistGridView: React.FC<ArtistGridViewProps> = ({
     return (
         <motion.div
             ref={rootRef}
-            data-ponder-page-scope="grid-view-page"
+
             data-library-renderer="grid"
             data-library-surface="artist"
             initial={{ opacity: 0 }}

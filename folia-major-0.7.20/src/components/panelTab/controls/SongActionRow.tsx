@@ -2,7 +2,6 @@ import React from 'react';
 import { Heart, Repeat, Repeat1, RepeatOff, Sparkle, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ThemeSourceModel } from '../../../hooks/themeControllerState';
-import { noteLoopButtonPress } from '../../../services/ponder/loopShuffleHint';
 
 // src/components/panelTab/controls/SongActionRow.tsx
 // 当前歌曲的三个动作：循环、喜欢、生成 AI 主题。面板里唯一一排大触控目标，保持原样。
@@ -48,7 +47,6 @@ const SongActionRow: React.FC<SongActionRowProps> = ({
             <button
                 onClick={event => {
                     onToggleLoop(event);
-                    noteLoopButtonPress();
                 }}
                 disabled={loopToggleDisabled}
                 title={loopTitle}

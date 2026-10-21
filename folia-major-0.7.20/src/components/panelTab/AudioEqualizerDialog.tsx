@@ -151,7 +151,7 @@ const AudioEqualizerDialog: React.FC<AudioEqualizerDialogProps> = ({ isDaylight,
             maxWidthClass="max-w-2xl"
         >
             {/* display:contents，布局一如从前；在的意义只是让这扇对话框自己也能被思索命中。 */}
-            <div data-ponder="audio-equalizer" className="contents">
+            <div className="contents">
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                 <button
                     type="button"

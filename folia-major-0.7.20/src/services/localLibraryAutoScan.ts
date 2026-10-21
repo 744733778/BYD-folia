@@ -1,5 +1,7 @@
 import { getDirHandles } from './db';
-import { LOCAL_MUSIC_UPDATED_EVENT, resyncFolder } from './localMusicService';
+import { LOCAL_MUSIC_UPDATED_EVENT, resyncFolder, importFolder } from './localMusicService';
+import { detectNativeLibrary, getNativeSnapshot, ensureNativeStorageAccess } from './nativeLibrary/nativeLibrarySource';
+import { onNativeSystemEvent } from './foliaExtensionBridge';
 import { summarizeLocalLibraryChanges } from '../utils/localLibraryWatchRecords';
 import { useLocalLibrarySettingsStore } from '../stores/useLocalLibrarySettingsStore';
 import type {
@@ -28,6 +30,11 @@ const QUIET_PERIOD_MS = 1500;
 const MAX_BATCH_DELAY_MS = 20000;
 /** Re-reading the handle list on every library mutation would thrash; the scans themselves fire it. */
 const ROOT_REFRESH_DEBOUNCE_MS = 1200;
+/** 原生媒体库变更（系统扫描完成）后的重扫防抖：拷 300 首歌会连发多次通知。 */
+const NATIVE_RESCAN_DEBOUNCE_MS = 2500;
+
+/** 原生 libraryChanged 订阅的清理函数（与 FileSystemObserver 的 watch 生命周期无关） */
+let nativeLibraryChangedCleanup: (() => void) | null = null;
 
 type PermissionAwareDirectoryHandle = FileSystemDirectoryHandle & {
     queryPermission?: (descriptor: { mode: 'read' | 'readwrite'; }) => Promise<PermissionState>;
@@ -403,6 +410,59 @@ export const startLocalLibraryAutoScan = (): void => {
     startCount += 1;
     if (startCount > 1) return;
 
+    // 原生壳冷启动重建（与 FileSystemObserver 支持无关，必须先于 support 门控执行——
+    // GeckoView 无 FileSystemObserver，门控不满足会直接 return）。
+    // 曲库来自 MediaStore，查询是毫秒级：桥没就绪时重试 5 次即可，不需要长时间轮询。
+    void (async () => {
+        try { await ensureNativeStorageAccess(); } catch { /* ignore */ }
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+            try {
+                if (!detectNativeLibrary()) { await new Promise(r => setTimeout(r, 1000)); continue; }
+                const snap = await getNativeSnapshot();
+                if (snap && snap.files.length > 0) {
+                    console.log(`[NativeLibrary][ColdStart] 第${attempt + 1}次：快照 ${snap.files.length} 文件，重建内存树+重挂句柄。`);
+                    // 把已拿到的非空快照直传，避免 importFolder 内部二次拉取
+                    await importFolder(undefined, snap);
+                    return;
+                }
+            } catch (error) {
+                console.warn(`[NativeLibrary][ColdStart] 第${attempt + 1}次失败:`, error);
+            }
+            await new Promise(r => setTimeout(r, 1000));
+        }
+        console.warn('[NativeLibrary][ColdStart] 仍未拿到快照，等媒体库变更广播或用户手动扫描。');
+    })();
+
+    // 系统媒体扫描完成（插 U 盘、拷完歌、权限刚授予）→ 壳层推 libraryChanged → 增量重扫。
+    // 这条推送是"歌放进 Music 文件夹后不用重启 APP 就能看到"的关键。
+    let nativeRescanTimer: ReturnType<typeof setTimeout> | null = null;
+    let nativeRescanning = false;
+    const scheduleNativeRescan = () => {
+        if (nativeRescanTimer) clearTimeout(nativeRescanTimer);
+        nativeRescanTimer = setTimeout(() => {
+            nativeRescanTimer = null;
+            void (async () => {
+                if (nativeRescanning || !detectNativeLibrary()) return;
+                nativeRescanning = true;
+                try {
+                    const snap = await getNativeSnapshot(true);
+                    if (snap && snap.files.length > 0) await importFolder(undefined, snap);
+                } catch (error) {
+                    console.warn('[NativeLibrary] libraryChanged 重扫失败:', error);
+                } finally {
+                    nativeRescanning = false;
+                }
+            })();
+        }, NATIVE_RESCAN_DEBOUNCE_MS);
+    };
+    const offNativeLibraryChanged = onNativeSystemEvent((method) => {
+        if (method === 'libraryChanged') scheduleNativeRescan();
+    });
+    nativeLibraryChangedCleanup = () => {
+        offNativeLibraryChanged();
+        if (nativeRescanTimer) clearTimeout(nativeRescanTimer);
+    };
+
     if (!isLocalLibraryAutoScanSupported()) {
         patchState({ supported: false });
         return;
@@ -429,6 +489,8 @@ export const stopLocalLibraryAutoScan = (): void => {
 
     unsubscribeSettings?.();
     unsubscribeSettings = null;
+    nativeLibraryChangedCleanup?.();
+    nativeLibraryChangedCleanup = null;
     if (libraryUpdatedListener) {
         window.removeEventListener(LOCAL_MUSIC_UPDATED_EVENT, libraryUpdatedListener);
         libraryUpdatedListener = null;

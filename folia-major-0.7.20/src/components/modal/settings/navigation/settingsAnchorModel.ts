@@ -18,7 +18,7 @@ export const SETTINGS_ANCHOR_DEFINITIONS = {
     videoLayerSettings: { section: 'appearance', labelKey: 'options.videoLayerSettings' },
     importExportTitle: { section: 'appearance', labelKey: 'options.importExportTitle' },
 
-    // GeneralSettingsSubview (PinnedCommandSettings and PonderHintSettingsSection render inside it)
+    // GeneralSettingsSubview (PinnedCommandSettings renders inside it)
     languageSettings: { section: 'general', labelKey: 'options.languageSettings' },
     homeTabsVisibility: { section: 'general', labelKey: 'options.homeTabsVisibility' },
     rememberHomeCardPosition: { section: 'general', labelKey: 'options.rememberHomeCardPosition' },
@@ -29,7 +29,6 @@ export const SETTINGS_ANCHOR_DEFINITIONS = {
     bravaisSettings: { section: 'general', labelKey: 'options.bravaisSettings', requiresBravaisSuite: true },
     bottomUiSettings: { section: 'general', labelKey: 'options.bottomUiSettings' },
     pinnedCommands: { section: 'general', labelKey: 'options.pinnedCommands' },
-    ponderHints: { section: 'general', labelKey: 'options.ponderHints' },
 
     // PlaybackSettingsSubview (TransitionSettingsSection renders inside it)
     queueSettings: { section: 'playback', labelKey: 'options.queueSettings' },

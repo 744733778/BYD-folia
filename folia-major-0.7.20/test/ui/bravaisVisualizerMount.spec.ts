@@ -110,7 +110,7 @@ test('the solid bravais home unmounts the visualizer; see-through looks and the 
         const { useSettingsModalStore } = await import(path);
         useSettingsModalStore.getState().openSettings('options');
     });
-    await expect(page.locator('[data-ponder-page-scope="settings-page"]')).toBeVisible();
+    await expect(page.locator('[data-page-scope="settings-page"]')).toBeVisible();
     await expect(page.locator('[data-library-stage="bravais"]')).toBeVisible();
     await page.waitForTimeout(600);
     expect(await visualizerMounted(page)).toBe(false);

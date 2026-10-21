@@ -24,9 +24,9 @@ export const foliumThemeVars = (theme: FoliumTheme | null | undefined): React.CS
 
 /**
  * What a host container holds, for `data-folium-kind`. Together with
- * `data-folium-entry` (the namespaced registry id) it lets a Ponder target's
- * hoverSelector or `dom` anchor pick out one entry of a mod — the markup
- * inside is out of reach in a ShadowRoot, the container is not.
+ * `data-folium-entry` (the namespaced registry id) it lets a mod entry be
+ * picked out from the outside — the markup inside is out of reach in a
+ * ShadowRoot, the container is not.
  */
 export type FoliumEntryKind =
     | 'visualizer'

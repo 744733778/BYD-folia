@@ -1071,7 +1071,7 @@ test.describe('[grid-only] directory interactions', () => {
         await expect(infoTitle.locator('xpath=following-sibling::p[1]')).toHaveText(`${HOME_LOCAL_SONGS.length} Tracks • All Songs`);
 
         await showMap(page);
-        const allSongsCard = page.locator('[data-ponder-page-scope="local-grid-map-page"] .theme-polaroid-card')
+        const allSongsCard = page.locator('[data-page-scope="local-grid-map-page"] .theme-polaroid-card')
             .filter({ hasText: `${HOME_LOCAL_SONGS.length} tracks in this folder` })
             .filter({ hasText: 'All Songs' });
         await expect(allSongsCard).toHaveCount(1);
@@ -1106,7 +1106,7 @@ test.describe('[grid-only] directory interactions', () => {
         await page.locator('button[role="checkbox"][title="Music/Beta"]').click();
         await expect.poll(async () => (await batchScope(page))?.itemIds).toEqual([homeFolderId('Music/Beta')]);
         // 卡片在批量面板下面露出的部分不一定能点到中心：直接派发 click（卡片的 onClick 就是批选切换）。
-        await page.locator('[data-ponder-page-scope="local-grid-map-page"] .theme-polaroid-card', { hasText: 'Extra' }).dispatchEvent('click');
+        await page.locator('[data-page-scope="local-grid-map-page"] .theme-polaroid-card', { hasText: 'Extra' }).dispatchEvent('click');
         await expect.poll(async () => (await batchScope(page))?.itemIds).toEqual([homeFolderId('Extra'), homeFolderId('Music/Beta')]);
 
         await clearLog(page);
@@ -1147,7 +1147,7 @@ test.describe('[grid-only] directory interactions', () => {
         await page.locator('button[class*="group/grid-title"]').click();
         await expect.poll(async () => (await batchScope(page))?.itemIds).toEqual([]);
         await page.locator('button[role="checkbox"][title="Music/Beta"]').click();
-        await page.locator('[data-ponder-page-scope="local-grid-map-page"] .theme-polaroid-card', { hasText: 'Extra' }).dispatchEvent('click');
+        await page.locator('[data-page-scope="local-grid-map-page"] .theme-polaroid-card', { hasText: 'Extra' }).dispatchEvent('click');
         await expect.poll(async () => (await batchScope(page))?.itemIds).toEqual([homeFolderId('Extra'), homeFolderId('Music/Beta')]);
         await clearLog(page);
 

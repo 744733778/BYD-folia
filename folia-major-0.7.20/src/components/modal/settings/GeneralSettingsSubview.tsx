@@ -6,7 +6,6 @@ import type { Theme } from '../../../types';
 import type { AppLanguagePreference } from '../../../i18n/config';
 import { CustomSelect } from '../../shared/CustomSelect';
 import PinnedCommandSettings from './PinnedCommandSettings';
-import PonderHintSettingsSection from './PonderHintSettingsSection';
 import PlaybackEntryViewSection from './PlaybackEntryViewSection';
 import LibrarySuiteSection from './LibrarySuiteSection';
 import BravaisSettingsSection from './BravaisSettingsSection';
@@ -222,12 +221,6 @@ const GeneralSettingsSubview: React.FC<GeneralSettingsSubviewProps> = ({
                 isDaylight={isDaylight}
                 settingsCardClass={settingsCardClass}
                 theme={theme}
-            />
-
-            <PonderHintSettingsSection
-                settingsCardClass={settingsCardClass}
-                isDaylight={isDaylight}
-                accentColor={theme?.accentColor}
             />
         </div>
     );

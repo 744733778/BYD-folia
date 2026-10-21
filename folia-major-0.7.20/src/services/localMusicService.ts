@@ -1,5 +1,5 @@
 import { LocalSong, LyricData, LocalLibrarySnapshot, LocalLibrarySnapshotFile, LocalLibrarySnapshotNode, type SongResult } from '../types';
-import { detectNativeLibrary, buildVirtualDirectoryHandle, pickNativeDirectory } from './nativeLibrary/nativeLibrarySource';
+import { detectNativeLibrary, buildSnapshotVirtualHandle, findNativeFileHandle, readNativeAudioMeta, readNativeFileStats, readNativeFileContentUri, readNativeRelativePath, readNativeSidecarPath, readNativeTranslationSidecarPath, getNativeCoverUrl, getNativeMediaUrl, getNativeSnapshot, type NativeAudioMeta, type NativeSnapshot } from './nativeLibrary/nativeLibrarySource';
 import { saveLocalSong, saveLocalSongs, deleteLocalSong as dbDeleteLocalSong, deleteLocalSongs as dbDeleteLocalSongs, saveDirHandles, getDirHandles, deleteDirHandle, getLocalSongs, getLocalLibrarySnapshot, saveLocalLibrarySnapshot, deleteLocalLibrarySnapshot } from './db';
 import { getLocalPlaylists, saveLocalPlaylists } from './localPlaylistService';
 import { parseEmbeddedMetadataAsync, type EmbeddedMetadataResult } from '../utils/localMetadataWorkerClient';
@@ -48,16 +48,30 @@ interface ImportPreparationMetrics {
 
 interface FileEntryForImport {
     handle: FileSystemFileHandle;
-    file: File;
+    /** 原生源且目录树已带 meta 时为 undefined（故意不 getFile() 整字节回传） */
+    file?: File;
     folderName: string;
     relativePath: string;
     // A sidecar lyric file of this track was added or modified on disk since the last scan.
     sidecarLyricFilesChanged?: boolean;
+    /** 原生 MediaMetadataRetriever 目录树直接携带的音频元数据；存在即走快速导入分支 */
+    nativeAudioMeta?: NativeAudioMeta;
+    /** 原生句柄直接暴露的非字节文件信息（size/lastModified/mimeType） */
+    nativeStats?: { size: number; lastModified: number; mimeType: string };
 }
 
 interface LocalLyricFileCandidate {
-    file: File;
+    /** web/Electron 路径：导入时已 getFile() 拿到字节；原生路径为 undefined。 */
+    file?: File;
+    /** 原生侧car歌词相对路径：导入不读字节，播放时按需 readNativeFile → decodeLyricFileBytes。 */
+    nativePath?: string;
     format?: ExplicitFileTimedLyricFormat;
+}
+
+/** 文件夹封面候选：File 字节路径或原生 contentUri 路径二选一。 */
+interface LocalCoverCandidate {
+    file?: File;
+    nativeContentUri?: string;
 }
 
 interface SnapshotTraversalResult {
@@ -68,7 +82,12 @@ interface SnapshotTraversalResult {
 
 interface SnapshotTraversalFile {
     handle: FileSystemFileHandle;
-    file: File;
+    /** 原生源且目录树已带 meta 的音频文件、以及原生源 lyric/cover 文件，均为 undefined（不预读字节） */
+    file?: File;
+    nativeAudioMeta?: NativeAudioMeta;
+    nativeStats?: { size: number; lastModified: number; mimeType: string };
+    /** 原生图片条目携带的 SAF content uri（cover 候选用） */
+    nativeContentUri?: string;
 }
 
 interface ImportDiffPlan {
@@ -78,8 +97,8 @@ interface ImportDiffPlan {
     totalAudioFiles: number;
     relevantFileCount: number;
     lrcMap: Map<string, LocalLyricFileCandidate>;
-    tlrcMap: Map<string, File>;
-    coverMap: Map<string, File>;
+    tlrcMap: Map<string, LocalLyricFileCandidate>;
+    coverMap: Map<string, LocalCoverCandidate>;
     snapshot: LocalLibrarySnapshot;
 }
 
@@ -95,6 +114,9 @@ const KNOWN_AUDIO_EXTENSIONS = /\.(mp3|flac|m4a|wav|ogg|opus|aac|alac|ape|wv|tta
 const LYRIC_EXTENSIONS = /\.(lrc|vtt|ttml|qrc|yrc|krc|fia)$/i;
 const TRANSLATION_LYRIC_EXTENSIONS = /\.t\.(lrc|vtt)$/i;
 const IMPORT_CONCURRENCY = 6;
+// 目录树遍历的兄弟目录并发：每次目录列出是一次原生桥往返（postMessage→content script→native），
+// 串行递归是导入耗时大头；并发 6 把往返重叠。原生侧 MMR/缓存由安卓子代理并行优化。
+const DIRECTORY_TRAVERSAL_CONCURRENCY = 6;
 export const LOCAL_MUSIC_UPDATED_EVENT = 'folia-local-music-updated';
 export const LOCAL_MUSIC_SCAN_PROGRESS_EVENT = 'folia-local-music-scan-progress';
 const HYDRATION_BATCH_SIZE = 25;
@@ -153,11 +175,11 @@ function notifyLocalMusicScanProgress(detail: LocalMusicScanProgressDetail) {
 }
 
 async function getImportDirectoryHandle(expectedRootName?: string): Promise<FileSystemDirectoryHandle | null> {
-    // 安卓原生桥优先：用原生 picker 拿目录树，构造虚拟 handle。
-    // 原生桥不做磁盘持久化重扫（第一版），expectedRootName 时也重新选择。
+    // 原生壳：曲库永远来自 MediaStore 快照，没有"选目录"这一步。
+    // 重扫/首次导入都从同一份快照重建内存树，句柄无需持久化（重启后也不可能还原）。
     if (detectNativeLibrary()) {
-        const tree = await pickNativeDirectory();
-        return tree ? buildVirtualDirectoryHandle(tree) : null;
+        const snapshot = await getNativeSnapshot(Boolean(expectedRootName));
+        return snapshot ? buildSnapshotVirtualHandle(snapshot) : null;
     }
 
     if (expectedRootName) {
@@ -495,6 +517,12 @@ async function buildSnapshotTree(
         ? [...inheritedIgnoreMatchers, localIgnoreMatcher]
         : inheritedIgnoreMatchers;
 
+    // 先同步分流：被忽略目录、普通文件、待递归目录。目录递归原来是逐目录串行 await——
+    // 每个目录一次 listNativeDirectory 桥往返（postMessage→content script→native），
+    // 300+ 首歌的相册树几十次串行往返就是导入耗时大头；这里对兄弟目录做有界并发。
+    const ignoredChildNodes: LocalLibrarySnapshotNode[] = [];
+    const pendingFileEntries: FileSystemHandle[] = [];
+    const pendingDirEntries: FileSystemHandle[] = [];
     for (const entry of childEntries) {
         if (entry.name === '.foliaignore') {
             continue;
@@ -502,7 +530,7 @@ async function buildSnapshotTree(
 
         const entryPath = `${currentPath}/${entry.name}`;
         if (entry.kind === 'directory' && ignoredFolderPaths.has(entryPath)) {
-            children.push({ name: entry.name, relativePath: entryPath, ignored: true, hash: '', files: [], children: [] });
+            ignoredChildNodes.push({ name: entry.name, relativePath: entryPath, ignored: true, hash: '', files: [], children: [] });
             continue;
         }
         const importRelativePath = entryPath.startsWith(`${rootFolderName}/`)
@@ -513,36 +541,66 @@ async function buildSnapshotTree(
         }
 
         if (entry.kind === 'directory') {
-            const childPath = entryPath;
-
-            try {
-                const childResult = await buildSnapshotTree(
-                    entry as FileSystemDirectoryHandle,
-                    childPath,
-                    rootFolderName,
-                    ignoreMatchers,
-                    filesByPath,
-                    ignoredFolderPaths,
-                );
-                children.push(childResult.tree);
-                relevantFileCount += childResult.relevantFileCount;
-            } catch (error) {
-                console.warn(`[LocalMusic][Import] Skip failed child directory "${childPath}":`, error);
-            }
-
+            pendingDirEntries.push(entry);
             continue;
         }
 
+        if (getSnapshotFileKind(entry.name) === 'other') {
+            continue;
+        }
+        pendingFileEntries.push(entry);
+    }
+
+    for (const entry of pendingFileEntries) {
         const kind = getSnapshotFileKind(entry.name);
-        if (kind === 'other') {
-            continue;
-        }
-
         const fileHandle = entry as FileSystemFileHandle;
+        const relativePath = `${currentPath}/${entry.name}`;
 
         try {
+            // 原生桥快路径：目录树条目已带音频 meta（原生 MediaMetadataRetriever 提取）时，
+            // 不调 getFile()——那会把整音频字节 base64 经桥回传再在 JS 里解析，几百首歌极慢。
+            // 直接用条目自带的 size/lastModified 建快照与签名；音频元数据后续随导入直接用。
+            const nativeMeta = readNativeAudioMeta(fileHandle);
+            if (kind === 'audio' && nativeMeta) {
+                const stats = readNativeFileStats(fileHandle);
+                const size = stats?.size ?? 0;
+                const lastModified = stats?.lastModified ?? 0;
+                files.push({
+                    name: entry.name,
+                    relativePath,
+                    kind,
+                    size,
+                    lastModified,
+                    signature: buildFileSignature(relativePath, size, lastModified)
+                });
+                filesByPath.set(relativePath, { handle: fileHandle, nativeAudioMeta: nativeMeta, nativeStats: stats });
+                relevantFileCount += 1;
+                continue;
+            }
+
+            // 原生源 lyric/cover 快路径：封面字节与歌词字节同样不进 JS。
+            // cover 条目带 contentUri（SAF）→ 播放时直接 /cover?uri=... 同源出图；
+            // lyric 条目只记相对路径 → 播放时按需 readNativeFile → decodeLyricFileBytes（KRC 解密复用）。
+            const nativeStats = readNativeFileStats(fileHandle);
+            if (nativeStats && kind !== 'audio') {
+                files.push({
+                    name: entry.name,
+                    relativePath,
+                    kind,
+                    size: nativeStats.size,
+                    lastModified: nativeStats.lastModified,
+                    signature: buildFileSignature(relativePath, nativeStats.size, nativeStats.lastModified)
+                });
+                filesByPath.set(relativePath, {
+                    handle: fileHandle,
+                    nativeStats,
+                    nativeContentUri: readNativeFileContentUri(fileHandle),
+                });
+                relevantFileCount += 1;
+                continue;
+            }
+
             const file = await fileHandle.getFile();
-            const relativePath = `${currentPath}/${file.name}`;
             const signature = buildFileSignature(relativePath, file.size, file.lastModified);
 
             files.push({
@@ -559,6 +617,41 @@ async function buildSnapshotTree(
             console.warn(`[LocalMusic][Import] Skip unreadable file "${currentPath}/${entry.name}":`, error);
         }
     }
+
+    // 主线程分块让出：每 100 个文件后让出一帧，避免 path 模式整库内存遍历卡顿 UI。
+    if (pendingFileEntries.length > 100) {
+        await new Promise(r => setTimeout(r, 0));
+    }
+
+    // 兄弟目录有界并发递归：每目录一次 listNativeDirectory 桥往返，并发 6 把串行等待重叠掉。
+    const childResults = await mapWithConcurrency(
+        pendingDirEntries,
+        DIRECTORY_TRAVERSAL_CONCURRENCY,
+        async (entry) => {
+            const childPath = `${currentPath}/${entry.name}`;
+            try {
+                return await buildSnapshotTree(
+                    entry as FileSystemDirectoryHandle,
+                    childPath,
+                    rootFolderName,
+                    ignoreMatchers,
+                    filesByPath,
+                    ignoredFolderPaths,
+                );
+            } catch (error) {
+                console.warn(`[LocalMusic][Import] Skip failed child directory "${childPath}":`, error);
+                return null;
+            }
+        },
+    );
+    for (const childResult of childResults) {
+        if (!childResult) {
+            continue;
+        }
+        children.push(childResult.tree);
+        relevantFileCount += childResult.relevantFileCount;
+    }
+    children.push(...ignoredChildNodes);
 
     const tree: LocalLibrarySnapshotNode = {
         name: handle.name,
@@ -638,9 +731,9 @@ async function collectImportDiffPlan(
             groups.set(key, [value]);
         }
     };
-    const lyricCandidates = new Map<string, { file: File; priority: number; format?: ExplicitFileTimedLyricFormat; }>();
-    const translationLyricCandidates = new Map<string, { file: File; priority: number; }>();
-    const coverCandidates = new Map<string, { file: File; priority: number; }>();
+    const lyricCandidates = new Map<string, { file?: File; nativePath?: string; priority: number; format?: ExplicitFileTimedLyricFormat; }>();
+    const translationLyricCandidates = new Map<string, { file?: File; nativePath?: string; priority: number; }>();
+    const coverCandidates = new Map<string, { file?: File; nativeContentUri?: string; priority: number; }>();
 
     currentFiles.forEach((file) => {
         const previousFile = previousFiles.get(file.relativePath);
@@ -714,6 +807,20 @@ async function collectImportDiffPlan(
             continue;
         }
 
+        // 歌词/翻译歌词/文件夹封面：web/Electron 路径已 getFile() 拿到真实 File；
+        // 原生路径故意不读字节（file 为空），只记相对路径/contentUri，播放时按需取。
+        // 两者都拿不到才算遍历异常，跳过。
+        const isLyricOrCoverKind = snapshotFile.kind === 'lyric'
+            || snapshotFile.kind === 'translationLyric'
+            || snapshotFile.kind === 'cover';
+        if (isLyricOrCoverKind && !traversedFile.file && !traversedFile.nativeStats) {
+            console.warn(`[LocalMusic][Import] No readable File for lyric/cover "${snapshotFile.relativePath}".`);
+            continue;
+        }
+        const sidecarFile = traversedFile.file;
+        // 原生路径：候选只记相对路径（=snapshotFile.relativePath），字节留给播放时读。
+        const nativeSidecarPath = sidecarFile ? undefined : snapshotFile.relativePath;
+
         const pathSegments = snapshotFile.relativePath.split('/');
         const fileName = pathSegments[pathSegments.length - 1];
         const folderName = pathSegments.slice(0, -1).join('/');
@@ -726,12 +833,12 @@ async function collectImportDiffPlan(
             if (snapshotFile.kind === 'translationLyric') {
                 const existingTranslationLyric = translationLyricCandidates.get(baseName);
                 if (!existingTranslationLyric || priority < existingTranslationLyric.priority) {
-                    translationLyricCandidates.set(baseName, { file: traversedFile.file, priority });
+                    translationLyricCandidates.set(baseName, { file: sidecarFile, nativePath: nativeSidecarPath, priority });
                 }
             } else {
                 const existingLyric = lyricCandidates.get(baseName);
                 if (!existingLyric || priority < existingLyric.priority) {
-                    lyricCandidates.set(baseName, { file: traversedFile.file, priority, format });
+                    lyricCandidates.set(baseName, { file: sidecarFile, nativePath: nativeSidecarPath, priority, format });
                 }
             }
             continue;
@@ -743,7 +850,12 @@ async function collectImportDiffPlan(
             const existingCover = coverCandidates.get(folderKey);
 
             if (!existingCover || priority < existingCover.priority) {
-                coverCandidates.set(folderKey, { file: traversedFile.file, priority });
+                coverCandidates.set(folderKey, {
+                    file: sidecarFile,
+                    // 原生封面：带 SAF contentUri 时不读字节，/cover?uri=... 同源出图。
+                    nativeContentUri: traversedFile.nativeContentUri,
+                    priority,
+                });
             }
             continue;
         }
@@ -766,6 +878,8 @@ async function collectImportDiffPlan(
                 folderName,
                 relativePath: snapshotFile.relativePath,
                 sidecarLyricFilesChanged: lyricFileChangedBasePaths.has(getAudioBasePath(snapshotFile.relativePath)),
+                nativeAudioMeta: traversedFile.nativeAudioMeta,
+                nativeStats: traversedFile.nativeStats,
             });
             continue;
         }
@@ -784,9 +898,9 @@ async function collectImportDiffPlan(
         removedSongs,
         totalAudioFiles: currentAudioPaths.size,
         relevantFileCount: traversalResult.relevantFileCount,
-        lrcMap: new Map(Array.from(lyricCandidates.entries()).map(([baseName, value]) => [baseName, { file: value.file, format: value.format }])),
-        tlrcMap: new Map(Array.from(translationLyricCandidates.entries()).map(([baseName, value]) => [baseName, value.file])),
-        coverMap: new Map(Array.from(coverCandidates.entries()).map(([folderKey, value]) => [folderKey, value.file])),
+        lrcMap: new Map(Array.from(lyricCandidates.entries()).map(([baseName, value]) => [baseName, { file: value.file, nativePath: value.nativePath, format: value.format }])),
+        tlrcMap: new Map(Array.from(translationLyricCandidates.entries()).map(([baseName, value]) => [baseName, { file: value.file, nativePath: value.nativePath }])),
+        coverMap: new Map(Array.from(coverCandidates.entries()).map(([folderKey, value]) => [folderKey, { file: value.file, nativeContentUri: value.nativeContentUri }])),
         snapshot
     };
 }
@@ -794,17 +908,21 @@ async function collectImportDiffPlan(
 async function buildImportedSong(
     entry: FileEntryForImport,
     lrcMap: Map<string, LocalLyricFileCandidate>,
-    tlrcMap: Map<string, File>,
-    coverMap: Map<string, File>,
+    tlrcMap: Map<string, LocalLyricFileCandidate>,
+    coverMap: Map<string, LocalCoverCandidate>,
     coverBlobCache: Map<string, Promise<PreparedLocalCoverBlob | undefined>>,
     includeEmbeddedMetadata = true,
     existingSong?: LocalSong
 ): Promise<{ song: LocalSong | null; metrics: ImportPreparationMetrics; }> {
     const fileHandle = entry.handle;
     const file = entry.file;
+    const nativeMeta = entry.nativeAudioMeta;
+    // 原生源且目录树已带 meta：故意不 getFile() 整字节回传，元数据直接用原生 MediaMetadataRetriever 结果。
+    const isNativeMetaAudio = Boolean(nativeMeta);
+    const fileName = file?.name ?? entry.relativePath.split('/').pop() ?? '';
     const getFileMs = 0;
 
-    if (!isAudioFile(file)) {
+    if (!isNativeMetaAudio && file && !isAudioFile(file)) {
         return {
             song: null,
             metrics: {
@@ -818,7 +936,7 @@ async function buildImportedSong(
         };
     }
 
-    const metadata = extractMetadataFromFilename(file.name);
+    const metadata = extractMetadataFromFilename(fileName);
     const baseName = getAudioBasePath(entry.relativePath);
 
     let localLyricsContent: string | undefined;
@@ -830,56 +948,101 @@ async function buildImportedSong(
     const keepUploadedLyrics = existingSong?.localLyricsOrigin === 'upload' && !entry.sidecarLyricFilesChanged;
     const keepUploadedTranslation = existingSong?.localTranslationLyricsOrigin === 'upload' && !entry.sidecarLyricFilesChanged;
 
+    // 原生侧car懒加载路径：导入期不读字节，播放首次显示歌词时按需 readNativeFile → decodeLyricFileBytes。
+    let pendingNativeSidecarLyricPath: string | undefined;
+    let pendingNativeTranslationSidecarPath: string | undefined;
+
+    // media 模式：快照音频项自带 sidecarPath（contentUri）——直接作为歌词懒加载路径，
+    // 不依赖树内 sidecar 文件条目（media 快照里没有）。
+    if (!pendingNativeSidecarLyricPath) {
+        pendingNativeSidecarLyricPath = readNativeSidecarPath(fileHandle);
+    }
+    if (!pendingNativeTranslationSidecarPath) {
+        pendingNativeTranslationSidecarPath = readNativeTranslationSidecarPath(fileHandle);
+    }
+
     if (keepUploadedLyrics) {
         localLyricsContent = existingSong?.localLyricsContent;
         localLyricsFormat = existingSong?.localLyricsFormat;
     } else if (lrcMap.has(baseName)) {
-        try {
-            const lyricCandidate = lrcMap.get(baseName)!;
-            localLyricsContent = await readLyricFile(lyricCandidate.file);
+        const lyricCandidate = lrcMap.get(baseName)!;
+        if (lyricCandidate.nativePath && !lyricCandidate.file) {
+            pendingNativeSidecarLyricPath = lyricCandidate.nativePath;
             localLyricsFormat = lyricCandidate.format;
-        } catch (e) {
-            console.error(`[LocalMusic] Failed to read local lyric for ${file.name}`, e);
+        } else if (lyricCandidate.file) {
+            try {
+                localLyricsContent = await readLyricFile(lyricCandidate.file);
+                localLyricsFormat = lyricCandidate.format;
+            } catch (e) {
+                console.error(`[LocalMusic] Failed to read local lyric for ${fileName}`, e);
+            }
         }
     }
 
     if (keepUploadedTranslation) {
         localTranslationLyricsContent = existingSong?.localTranslationLyricsContent;
     } else if (tlrcMap.has(baseName)) {
-        try {
-            localTranslationLyricsContent = await readLyricFile(tlrcMap.get(baseName)!);
-        } catch (e) {
-            console.error(`[LocalMusic] Failed to read local translation lyric for ${file.name}`, e);
+        const translationCandidate = tlrcMap.get(baseName)!;
+        if (translationCandidate.nativePath && !translationCandidate.file) {
+            pendingNativeTranslationSidecarPath = translationCandidate.nativePath;
+        } else if (translationCandidate.file) {
+            try {
+                localTranslationLyricsContent = await readLyricFile(translationCandidate.file);
+            } catch (e) {
+                console.error(`[LocalMusic] Failed to read local translation lyric for ${fileName}`, e);
+            }
         }
     }
     const lyricReadMs = performance.now() - lyricReadStartedAt;
 
     let folderCover: PreparedLocalCoverBlob | undefined;
+    let nativeCoverUrl: string | undefined;
     const coverReadStartedAt = performance.now();
     if (coverMap.has(entry.folderName)) {
-        if (!coverBlobCache.has(entry.folderName)) {
-            coverBlobCache.set(entry.folderName, (async () => {
-                try {
-                    return (await prepareLocalCoverBlob(coverMap.get(entry.folderName)!)) || undefined;
-                } catch (error) {
-                    console.warn(`[LocalMusic] Failed to read folder cover for ${entry.folderName}:`, error);
-                    return undefined;
-                }
-            })());
+        const coverEntry = coverMap.get(entry.folderName)!;
+        if (coverEntry.nativeContentUri && !coverEntry.file) {
+            // 原生封面：不读字节、不 staging；播放 UI 直接用 LocalHttpServer /cover?uri=... 出图。
+            nativeCoverUrl = getNativeCoverUrl(coverEntry.nativeContentUri);
+        } else if (coverEntry.file) {
+            if (!coverBlobCache.has(entry.folderName)) {
+                coverBlobCache.set(entry.folderName, (async () => {
+                    try {
+                        return (await prepareLocalCoverBlob(coverEntry.file!)) || undefined;
+                    } catch (error) {
+                        console.warn(`[LocalMusic] Failed to read folder cover for ${entry.folderName}:`, error);
+                        return undefined;
+                    }
+                })());
+            }
+            folderCover = await coverBlobCache.get(entry.folderName)!;
         }
-        folderCover = await coverBlobCache.get(entry.folderName)!;
+    } else {
+        // media 模式：快照里没有封面文件条目，封面 uri 挂在每个音频条目上（同目录 cover.jpg）。
+        const fileCoverUri = readNativeFileContentUri(fileHandle);
+        if (fileCoverUri) nativeCoverUrl = getNativeCoverUrl(fileCoverUri, 512);
     }
     const coverReadMs = performance.now() - coverReadStartedAt;
 
     let embeddedMetadata: EmbeddedMetadata = {};
     let parseMetadataMs = 0;
-    if (includeEmbeddedMetadata) {
+    if (isNativeMetaAudio) {
+        // 原生 MediaMetadataRetriever 已给齐 title/artist/album/duration(ms)/bitrate(bps)：
+        // 不再 getFile() 回传整音频字节、也不再起 metadata worker 解析；v1 不提取内嵌封面。
+        const meta = nativeMeta!;
+        embeddedMetadata = {
+            title: meta.title ?? undefined,
+            artist: meta.artist ?? undefined,
+            album: meta.album ?? undefined,
+            duration: typeof meta.duration === 'number' ? meta.duration : undefined,
+            bitrate: typeof meta.bitrate === 'number' ? meta.bitrate : undefined,
+        };
+    } else if (includeEmbeddedMetadata) {
         const parseMetadataStartedAt = performance.now();
 
         try {
-            embeddedMetadata = await extractEmbeddedMetadata(file, false);
+            embeddedMetadata = await extractEmbeddedMetadata(file!, false);
         } catch (e) {
-            console.warn(`[LocalMusic] Failed to parse metadata for ${file.name}:`, e);
+            console.warn(`[LocalMusic] Failed to parse metadata for ${fileName}:`, e);
         }
         parseMetadataMs = performance.now() - parseMetadataStartedAt;
     }
@@ -887,16 +1050,19 @@ async function buildImportedSong(
     let durationFallbackMs = 0;
     let usedDurationFallback = false;
     let duration = embeddedMetadata.duration || 0;
-    if (includeEmbeddedMetadata && !duration) {
+    if (!isNativeMetaAudio && includeEmbeddedMetadata && !duration) {
         usedDurationFallback = true;
         const durationFallbackStartedAt = performance.now();
-        duration = await getAudioDuration(file);
+        duration = await getAudioDuration(file!);
         durationFallbackMs = performance.now() - durationFallbackStartedAt;
     }
 
     const songId = existingSong?.id || generateId();
+    const fileSize = file?.size ?? entry.nativeStats?.size ?? 0;
+    const fileLastModified = file?.lastModified ?? entry.nativeStats?.lastModified ?? 0;
+    const mimeType = file?.type ?? entry.nativeStats?.mimeType ?? '';
     const importedMetadata = buildImportedMetadataSnapshot({
-        fileName: file.name,
+        fileName,
         embeddedTitle: embeddedMetadata.title,
         fallbackTitle: metadata.title,
         embeddedArtist: embeddedMetadata.artist,
@@ -908,13 +1074,13 @@ async function buildImportedSong(
     const localSong: LocalSong = {
         ...existingSong,
         id: songId,
-        fileName: file.name,
+        fileName,
         filePath: entry.relativePath,
         duration,
-        fileSize: file.size,
-        fileLastModified: file.lastModified,
-        fileSignature: buildFileSignature(entry.relativePath, file.size, file.lastModified),
-        mimeType: file.type,
+        fileSize,
+        fileLastModified,
+        fileSignature: buildFileSignature(entry.relativePath, fileSize, fileLastModified),
+        mimeType,
         bitrate: embeddedMetadata.bitrate || 0,
         addedAt: existingSong?.addedAt || Date.now(),
         title: titleOrigin === 'import' ? importedMetadata.title : existingSong?.title || importedMetadata.title,
@@ -924,17 +1090,21 @@ async function buildImportedSong(
         trackNumber: embeddedMetadata.trackNumber,
         discNumber: embeddedMetadata.discNumber,
         localCoverAssetId: folderCover?.assetId,
-        localCoverSource: folderCover ? 'folder' : undefined,
+        localCoverSource: folderCover ? 'folder' : (nativeCoverUrl ? 'folder' : undefined),
         localCoverNeedsAssetMigration: folderCover && !folderCover.assetId ? true : undefined,
         hasManualLyricSelection: existingSong?.hasManualLyricSelection ?? false,
         folderName: entry.folderName,
-        hasLocalLyrics: !!localLyricsContent,
+        // 原生侧car懒加载：内容未读也算「有本地歌词」，播放时按需填回 localLyricsContent。
+        hasLocalLyrics: Boolean(localLyricsContent || pendingNativeSidecarLyricPath),
         localLyricsContent,
-        localLyricsFormat: localLyricsContent ? localLyricsFormat : undefined,
-        localLyricsOrigin: localLyricsContent ? (keepUploadedLyrics ? 'upload' : 'sidecar') : undefined,
-        hasLocalTranslationLyrics: !!localTranslationLyricsContent,
+        localLyricsFormat: localLyricsContent || pendingNativeSidecarLyricPath ? localLyricsFormat : undefined,
+        localLyricsOrigin: (localLyricsContent || pendingNativeSidecarLyricPath) ? (keepUploadedLyrics ? 'upload' : 'sidecar') : undefined,
+        localSidecarLyricPath: pendingNativeSidecarLyricPath,
+        hasLocalTranslationLyrics: Boolean(localTranslationLyricsContent || pendingNativeTranslationSidecarPath),
         localTranslationLyricsContent,
-        localTranslationLyricsOrigin: localTranslationLyricsContent ? (keepUploadedTranslation ? 'upload' : 'sidecar') : undefined,
+        localTranslationLyricsOrigin: (localTranslationLyricsContent || pendingNativeTranslationSidecarPath) ? (keepUploadedTranslation ? 'upload' : 'sidecar') : undefined,
+        localTranslationSidecarLyricPath: pendingNativeTranslationSidecarPath,
+        nativeCoverUrl,
         hasEmbeddedLyrics: !!embeddedMetadata.lyrics,
         embeddedLyricsContent: embeddedMetadata.lyrics,
         hasEmbeddedTranslationLyrics: !!embeddedMetadata.translationLyrics,
@@ -974,6 +1144,37 @@ async function buildImportedSong(
 async function hydrateSongMetadata(song: LocalSong): Promise<LocalSong> {
     const fileHandle = fileHandleMap.get(song.id) || song.fileHandle;
     if (!fileHandle) {
+        return song;
+    }
+
+    // 原生桥快路径：目录树已带 meta 的歌曲，后台 hydrate 不再 getFile() 整字节回传 + worker 解析。
+    // v1 不提取内嵌封面（封面降级点：原生 meta 路径下歌曲封面只能走文件夹封面/在线封面，不读内嵌图）。
+    const nativeMeta = readNativeAudioMeta(fileHandle);
+    if (nativeMeta) {
+        const stats = readNativeFileStats(fileHandle);
+        if (stats) {
+            song.fileSize = stats.size;
+            song.fileLastModified = stats.lastModified;
+            if (stats.mimeType) song.mimeType = stats.mimeType;
+        }
+        if (typeof nativeMeta.duration === 'number' && nativeMeta.duration > 0) {
+            song.duration = nativeMeta.duration;
+        }
+        if (typeof nativeMeta.bitrate === 'number' && nativeMeta.bitrate > 0) {
+            song.bitrate = nativeMeta.bitrate;
+        }
+        const filenameMetadata = extractMetadataFromFilename(song.fileName);
+        song.importedMetadata = buildImportedMetadataSnapshot({
+            fileName: song.fileName,
+            embeddedTitle: nativeMeta.title ?? undefined,
+            fallbackTitle: filenameMetadata.title,
+            embeddedArtist: nativeMeta.artist ?? undefined,
+            embeddedArtists: undefined,
+            fallbackArtist: filenameMetadata.artist,
+            embeddedAlbum: nativeMeta.album ?? undefined,
+        });
+        if (song.titleOrigin === 'import') song.title = song.importedMetadata.title;
+        song.embeddedMetadataVersion = EMBEDDED_METADATA_VERSION;
         return song;
     }
 
@@ -1129,9 +1330,69 @@ async function hydrateImportedSongsInBackground(rootFolderName: string, songs: L
 
 
 // Import folder using File System Access API (if supported)
-export async function importFolder(expectedRootName?: string): Promise<LocalSong[]> {
+export async function importFolder(expectedRootName?: string, preloadedSnapshot?: NativeSnapshot | null): Promise<LocalSong[]> {
     // Request access in the user gesture before waiting for other library writes.
     try {
+        // snapshot（壳层 MediaStore 索引）直导：buildSnapshotVirtualHandle 内存树，零桥往返。
+        // 每次启动都走一遍 importFolderContents（纯内存遍历，几百首毫秒级），由既有 pipeline
+        // 对未变歌曲复用——不要"revision 命中就直接复用 IndexedDB"：句柄是进程内的，重启后
+        // 不复用会得到一堆播不了的条目。
+        let snapshot = preloadedSnapshot ?? await getNativeSnapshot(Boolean(expectedRootName));
+        // 空快照 = 媒体库还没权限/系统扫描还没跑完。此时**不要**建空库把已有曲目覆盖掉，
+        // 直接返回空让调用方保持现状（下次媒体库变更广播会再触发一次）。
+        if (snapshot && snapshot.files.length === 0) {
+            console.warn('[LocalMusic][Snapshot] 空快照，跳过导入（保留现有曲库）');
+            return [];
+        }
+        if (snapshot) {
+            const mode = snapshot.mode || 'saf';
+            const revKey = `native_library_revision__${mode}`;
+            const storedMode = ((): string | null => {
+                try { return localStorage.getItem('native_library_mode'); } catch { return null; }
+            })();
+            if (storedMode && storedMode !== mode) {
+                // 模式切换：路径标识空间不同（相对 vs 绝对），签名去重键会双份——整清旧模式条目。
+                const old = await getLocalSongs();
+                if (old.length) {
+                    await dbDeleteLocalSongs(old.map(s => s.id));
+                    console.log(`[LocalMusic][Snapshot] 索引模式 ${storedMode}→${mode}，已清旧条目 ${old.length}。`);
+                }
+            } else if (!storedMode) {
+                // 升级后首次快照导入（bridge-11/12 旧根残留，如 folderName="本地音乐"）：一次性整清，
+                // 防止"本地音乐"包装根与所选文件夹根并存。v1 标记只清一次。
+                const migrated = ((): boolean => {
+                    try { return localStorage.getItem('native_library_migrated_v1') === '1'; } catch { return true; }
+                })();
+                if (!migrated) {
+                    const old = await getLocalSongs();
+                    if (old.length) {
+                        await dbDeleteLocalSongs(old.map(s => s.id));
+                        console.log(`[LocalMusic][Snapshot] 升级首导：已清旧根残留 ${old.length} 首。`);
+                    }
+                }
+                try { localStorage.setItem('native_library_migrated_v1', '1'); } catch { /* ignore */ }
+            }
+            const dirHandle = buildSnapshotVirtualHandle(snapshot);
+            // 关键：给一个**稳定的根名**。importFolderContents 在没拿到 expectedRootName 时，
+            // 会用 isSameEntry 去比对已持久化的句柄来判断"这是不是同一个根"——而虚拟句柄进
+            // IndexedDB 后方法全丢，比对永远失败，于是每次启动都被当成新导入，根名被改成
+            // "本地音乐 (2)"、"(3)"……全库按新 folderName 重导一遍。
+            // 这正是"重启后要重新扫描、越扫越多"的根因：现在直接用快照下发的根名。
+            const stableRootName = expectedRootName
+                || (detectNativeLibrary() ? (snapshot.root || '本地音乐') : undefined);
+            // 一次性清理历史遗留：上面那个 bug 会让过去的版本留下 "本地音乐 (2)"、"(3)" 这样的
+            // 影子根，它们和主根是同一批文件。只在主根存在时清掉，并且只清一次。
+            if (stableRootName && detectNativeLibrary()) {
+                await cleanupShadowRootsOnce(stableRootName);
+            }
+            const songs = await runLocalFolderMutation(() => importFolderContents(dirHandle, stableRootName));
+            try {
+                localStorage.setItem(revKey, snapshot.revision);
+                localStorage.setItem('native_library_mode', mode);
+            } catch { /* ignore */ }
+            return songs;
+        }
+
         const dirHandle = await getImportDirectoryHandle(expectedRootName);
         if (!dirHandle) return [];
         return await runLocalFolderMutation(() => importFolderContents(dirHandle, expectedRootName));
@@ -1141,8 +1402,35 @@ export async function importFolder(expectedRootName?: string): Promise<LocalSong
     }
 }
 
-async function importFolderContents(dirHandle: FileSystemDirectoryHandle, expectedRootName?: string): Promise<LocalSong[]> {
-    try {
+/**
+ * 一次性清理"影子根"：旧版本因句柄比对失败，会把同一批文件重复导入成
+ * "本地音乐 (2)" / "(3)" 等根（folderName 前缀不同，内容完全一样）。
+ *
+ * 只在主根已经有歌时执行，且只执行一次；删的是重复条目，不是磁盘文件。
+ */
+async function cleanupShadowRootsOnce(canonicalRoot: string): Promise<void> {
+    const FLAG = 'native_shadow_root_cleanup_v1';
+    try { if (localStorage.getItem(FLAG) === '1') return; } catch { return; }
+
+    const all = await getLocalSongs();
+    const hasCanonical = all.some(song =>
+        song.folderName === canonicalRoot || (song.folderName?.startsWith(`${canonicalRoot}/`) ?? false));
+    if (!hasCanonical) return;
+
+    const escaped = canonicalRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const shadow = new RegExp(`^${escaped} \\(\\d+\\)(/|$)`);
+    const ids = all
+        .filter(song => song.folderName && shadow.test(song.folderName))
+        .map(song => song.id);
+
+    if (ids.length > 0) {
+        console.log(`[LocalMusic][Snapshot] 清理历史影子根条目 ${ids.length} 首（同内容的重复导入）`);
+        await deleteSongsByIds(ids);
+    }
+    try { localStorage.setItem(FLAG, '1'); } catch { /* ignore */ }
+}
+
+async function importFolderContents(dirHandle: FileSystemDirectoryHandle, expectedRootName?: string): Promise<LocalSong[]> {    try {
         const importStartedAt = performance.now();
 
         let rootFolderName = expectedRootName || dirHandle.name;
@@ -1550,6 +1838,27 @@ async function recoverFileHandleFromPersistedDirectory(song: LocalSong): Promise
         return null;
     }
 
+    // 原生壳：虚拟句柄进 IndexedDB 只剩字段、方法丢光（结构化克隆），不能拿来当 FileSystemHandle 用。
+    // 直接按曲库内相对路径去新快照里取一个，比重走持久化句柄那条路更短也更可靠。
+    if (detectNativeLibrary()) {
+        try {
+            const snapshot = await getNativeSnapshot();
+            if (!snapshot) return null;
+            const relativePathFromRoot = song.filePath.startsWith(`${rootFolderName}/`)
+                ? song.filePath.slice(rootFolderName.length + 1)
+                : song.filePath;
+            const handle = findNativeFileHandle(snapshot, relativePathFromRoot);
+            if (handle) {
+                fileHandleMap.set(song.id, handle);
+                song.fileHandle = handle;
+            }
+            return handle;
+        } catch (error) {
+            console.warn(`[LocalMusic] Native handle recovery failed for ${song.filePath}:`, error);
+            return null;
+        }
+    }
+
     const dirHandles = await getDirHandles();
     const rootDirHandle = dirHandles[rootFolderName];
     if (!rootDirHandle) {
@@ -1616,6 +1925,11 @@ export async function getAudioFromLocalSong(song: LocalSong): Promise<string | n
     const fileHandle = await getAccessibleFileHandle(song);
 
     if (fileHandle) {
+        // 原生壳快路径：直接给同源 /local 流式 URL。支持 Range，<audio> 边下边播、拖动进度条；
+        // 不再把整首歌 base64 过桥再打补丁建 Blob（一首无损在车机上要几秒，且同时占三份内存）。
+        const nativeKey = readNativeRelativePath(fileHandle);
+        if (nativeKey) return getNativeMediaUrl(nativeKey);
+
         try {
             const file = await fileHandle.getFile();
             return await getAudioFromFile(file);
@@ -1834,6 +2148,12 @@ function getLocalSongRootFolderName(song: LocalSong): string | null {
 
 // Resyncs all imported local roots once, even when the song list contains nested folders.
 export async function resyncAllFolders(): Promise<LocalSong[] | null> {
+    // 原生曲库（MediaStore）本来就是整库快照：一次 importFolder 即全量。
+    // 按 rootFolderName 循环只会把同一份快照重复导 N 遍（N = 顶层目录数）。
+    if (detectNativeLibrary()) {
+        return await importFolder();
+    }
+
     const allSongs = await getLocalSongs();
     const handles = await getDirHandles();
     const rootFolderNames = Array.from(new Set(

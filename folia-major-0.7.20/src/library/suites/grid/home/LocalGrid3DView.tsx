@@ -1,7 +1,8 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FileUp, FolderOpen, Loader2, Music, ListMusic, User, Disc3, RefreshCw } from 'lucide-react';
 import DesktopGrid3DSurface, { DesktopGrid3DAction } from './DesktopGrid3DSurface';
+import { isNativeAndroidShell } from '../../../../services/foliaExtensionBridge';
 import { LocalPlaylist, LocalSong, Theme } from '../../../../types';
 import type { GridViewCollectionDescriptor } from '../../../../components/app/home/gridViewCollectionAdapters';
 import { useDebouncedFocusSync } from '../../../../hooks/useDebouncedFocusSync';
@@ -184,12 +185,17 @@ export const LocalGrid3DView: React.FC<LocalGrid3DViewProps> = ({
                 <Music size={64} />
                 <p className="text-lg">{t('localMusic.noLocalMusic')}</p>
                 <button
-                    onClick={() => void homeActions.importFolder()}
+                    onClick={() => {
+                        if (isNativeAndroidShell()) void homeActions.refreshFolders();
+                        else void homeActions.importFolder();
+                    }}
                     disabled={importBusy}
                     className="px-6 py-3 rounded-full transition-colors text-sm flex items-center gap-2 bg-white/10 hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                     {importBusy ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
-                    {scanning ? t('options.scanning') : actionState.importingFolder ? t('localMusic.importing') : t('localMusic.importFolder')}
+                    {isNativeAndroidShell()
+                        ? (scanning ? t('options.scanning') : t('options.refresh'))
+                        : (scanning ? t('options.scanning') : actionState.importingFolder ? t('localMusic.importing') : t('localMusic.importFolder'))}
                 </button>
             </div>
         );
@@ -232,8 +238,7 @@ export const LocalGrid3DView: React.FC<LocalGrid3DViewProps> = ({
                 directoryKey={directoryKey}
                 declaredHomeActions={declaredHomeActions}
                 batchConfig={localBatchConfig}
-                ponderControls="local-grid-controls"
-                gridMapPonderScope="local-grid-map-page"
+                gridMapPageScope="local-grid-map-page"
             />
         </>
     );

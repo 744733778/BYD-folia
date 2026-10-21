@@ -5,6 +5,9 @@ import GridPanelToggleIndicator from '../shared/GridPanelToggleIndicator';
 import { useTranslation } from 'react-i18next';
 import { SongResult, type LocalSong, type StatusMessage, Theme, type UnifiedSong } from '../../../../types';
 import { isSongUnavailable } from '../../../../services/onlineMusic/songAvailability';
+import { isNativeAndroidShell } from '../../../../services/foliaExtensionBridge';
+import { isFlatUi } from '../../../../utils/flatUi';
+import { buildFlatGridCoords, createFlatVisibleIndexResolver, resolveFlatGridLayout } from '../shared/flatGrid';
 import { formatSongName } from '../../../../utils/songNameFormatter';
 import { getSizedCoverUrl } from '../../../../utils/coverUrl';
 import { getSongCoverUrl } from '../../../../services/onlineMusic/songMetadata';
@@ -255,6 +258,12 @@ export const GridView: React.FC<GridViewProps> = ({
     const squareCards = useGridViewSettingsStore(state => state.gridViewSquareCards) && fullBleedCover;
     const minCardScale = useGridViewSettingsStore(state => state.gridViewMinCardScale);
     const minCardOpacity = useGridViewSettingsStore(state => state.gridViewMinCardOpacity);
+    // 安卓 GeckoView 壳（车机）：GPU 合成弱，几十张卡同时跑 rotateY 3D 入场 + fly-in 会把
+    // 进入网格的那一两秒卡住。原生壳下降级：入场动画全部关掉（卡片直接就位，遮罩转场仍在），
+    // 并撤掉每张卡的 willChange 提示（少建几十个合成层）。
+    const nativeShell = useMemo(() => isNativeAndroidShell(), []);
+    // 2D 版（安卓 flat 变体）：音乐墙换成等大等距的平面网格，去掉缩放衰减与飞入/翻转。
+    const flatMode = useMemo(() => isFlatUi(), []);
     const containerRef = useRef<HTMLDivElement>(null);
     const dragControls = useDragControls();
     const [focusedIndex, setFocusedIndex] = useState(0);
@@ -310,6 +319,12 @@ export const GridView: React.FC<GridViewProps> = ({
         return squareCards ? squareGridCardBox(box) : box;
     }, [containerSize.width, squareCards]);
 
+    // 平面网格：列数按容器宽度与卡片间距算（行数与坐标在拿到条目数后立刻生成）。
+    const flatCols = useMemo(
+        () => Math.max(1, Math.floor(containerSize.width / layoutConfig.spacingX)),
+        [containerSize.width, layoutConfig.spacingX],
+    );
+
     // Dynamically calculate visible clipping radius centered on (0,0) viewport coordinates
     const clipRadius = useMemo(() => {
         const { width, height } = containerSize;
@@ -337,12 +352,15 @@ export const GridView: React.FC<GridViewProps> = ({
         cardWidth: layoutConfig.cardWidth,
         cardHeight: layoutConfig.cardHeight,
         visibilityBuffer: GRID_VIEW_CARD_VISIBILITY_BUFFER,
-        minScale: minCardScale,
-        minOpacity: minCardOpacity,
+        // 平面网格：每张卡同样大小、同样不透明（不做中心放大与远处淡出）。
+        minScale: flatMode ? 1 : minCardScale,
+        minOpacity: flatMode ? 1 : minCardOpacity,
+        centerScale: flatMode ? 1 : undefined,
     }), [
         clipRadius,
         containerSize.height,
         containerSize.width,
+        flatMode,
         layoutConfig.cardHeight,
         layoutConfig.cardWidth,
         layoutConfig.lodEnd,
@@ -729,6 +747,20 @@ export const GridView: React.FC<GridViewProps> = ({
         };
     }, [dragX, dragY]);
 
+    // 2D 版：平面坐标 + 矩形网格裁剪；3D 版传 undefined，走原来的蜂窝几何。
+    const flatCoords = useMemo(
+        () => (flatMode ? buildFlatGridCoords(gridItems.length, flatCols, layoutConfig.spacingX, layoutConfig.spacingY) : undefined),
+        [flatMode, flatCols, gridItems.length, layoutConfig.spacingX, layoutConfig.spacingY],
+    );
+    const flatLayout = useMemo(
+        () => resolveFlatGridLayout(gridItems.length, flatCols, layoutConfig.spacingX, layoutConfig.spacingY),
+        [gridItems.length, flatCols, layoutConfig.spacingX, layoutConfig.spacingY],
+    );
+    const flatVisibleIndexes = useMemo(
+        () => (flatMode ? createFlatVisibleIndexResolver(flatLayout, gridItems.length) : undefined),
+        [flatMode, flatLayout, gridItems.length],
+    );
+
     const {
         coords: baseCoords,
         renderedIndexes,
@@ -741,6 +773,8 @@ export const GridView: React.FC<GridViewProps> = ({
         renderRadius,
         renderRing,
         fallbackIndexRef: focusedIndexRef,
+        coords: flatCoords,
+        resolveIndexes: flatVisibleIndexes,
     });
     // 封面按需取：预加载只需要「视口附近那几个下标」的封面，不必先把整张歌单的 URL 映成数组
     // （5000 首那种列表里，这个数组以前每页都要重建一次）。
@@ -768,13 +802,38 @@ export const GridView: React.FC<GridViewProps> = ({
         const bufferX = Math.max(0, containerSize.width / 2 - 2 * layoutConfig.spacingX);
         const bufferY = Math.max(0, containerSize.height / 2 - 2 * layoutConfig.spacingY);
 
-        return {
-            left: -maxX - bufferX,
-            right: -minX + bufferX,
-            top: -maxY - bufferY,
-            bottom: -minY + bufferY,
-        };
-    }, [baseCoords, layoutConfig, containerSize]);
+        // 平面网格像普通滚动区域一样夹在内容边界内（不露半屏空白）；3D 墙保留径向留白。
+        const halfCardW = layoutConfig.cardWidth / 2;
+        const halfCardH = layoutConfig.cardHeight / 2;
+        const flatLeft = -maxX - containerSize.width / 2 + halfCardW;
+        const flatRight = -minX + containerSize.width / 2 - halfCardW;
+        const flatTop = -maxY - containerSize.height / 2 + halfCardH;
+        const flatBottom = -minY + containerSize.height / 2 - halfCardH;
+
+        return flatMode
+            ? {
+                left: flatLeft <= flatRight ? flatLeft : (flatLeft + flatRight) / 2,
+                right: flatLeft <= flatRight ? flatRight : (flatLeft + flatRight) / 2,
+                top: flatTop <= flatBottom ? flatTop : (flatTop + flatBottom) / 2,
+                bottom: flatTop <= flatBottom ? flatBottom : (flatTop + flatBottom) / 2,
+            }
+            : {
+                left: -maxX - bufferX,
+                right: -minX + bufferX,
+                top: -maxY - bufferY,
+                bottom: -minY + bufferY,
+            };
+    }, [baseCoords, flatMode, layoutConfig, containerSize]);
+
+    // 平面网格：程序化的定位（打开、恢复、点击居中）也夹在内容边界内。
+    const clampPan = useCallback((x: number, y: number) => (
+        flatMode
+            ? {
+                x: Math.max(dragBounds.left, Math.min(dragBounds.right, x)),
+                y: Math.max(dragBounds.top, Math.min(dragBounds.bottom, y)),
+            }
+            : { x, y }
+    ), [dragBounds, flatMode]);
 
     const commitFocusedIndex = useCallback((index = focusedIndexRef.current) => {
         if (pendingFocusCommitTimeoutRef.current) {
@@ -801,19 +860,17 @@ export const GridView: React.FC<GridViewProps> = ({
     // Keep the active focusedIndex centered when baseCoords changes on resize
     useEffect(() => {
         if (baseCoords.length > 0 && focusedIndex >= 0 && focusedIndex < baseCoords.length) {
-            const targetX = -baseCoords[focusedIndex].baseX;
-            const targetY = -baseCoords[focusedIndex].baseY;
-            dragX.set(targetX);
-            dragY.set(targetY);
-            updateRenderedIndexesForViewport(targetX, targetY, true);
+            const pan = clampPan(-baseCoords[focusedIndex].baseX, -baseCoords[focusedIndex].baseY);
+            dragX.set(pan.x);
+            dragY.set(pan.y);
+            updateRenderedIndexesForViewport(pan.x, pan.y, true);
         }
-    }, [baseCoords, updateRenderedIndexesForViewport]);
+    }, [baseCoords, clampPan, updateRenderedIndexesForViewport]);
 
     // Recenter the viewport on target item coordinate offset
     const centerOnIndex = (index: number, snap = true) => {
         if (index < 0 || index >= baseCoords.length) return;
-        const targetX = -baseCoords[index].baseX;
-        const targetY = -baseCoords[index].baseY;
+        const { x: targetX, y: targetY } = clampPan(-baseCoords[index].baseX, -baseCoords[index].baseY);
 
         commitFocusedIndex(index);
         updateRenderedIndexesForViewport(targetX, targetY, true);
@@ -845,15 +902,17 @@ export const GridView: React.FC<GridViewProps> = ({
         const restoredX = -restoredCoord.baseX;
         const restoredY = -restoredCoord.baseY;
 
+        const pan = clampPan(restoredX, restoredY);
+
         commitFocusedIndex(restoredIndex);
-        dragX.set(restoredX);
-        dragY.set(restoredY);
-        wheelTargetRef.current = { x: restoredX, y: restoredY };
-        updateRenderedIndexesForViewport(restoredX, restoredY, true);
+        dragX.set(pan.x);
+        dragY.set(pan.y);
+        wheelTargetRef.current = { x: pan.x, y: pan.y };
+        updateRenderedIndexesForViewport(pan.x, pan.y, true);
 
         hasRestoredNavigationRef.current = true;
         pendingRestoreStateRef.current = null;
-    }, [baseCoords, collectionView.findEntryIndex, commitFocusedIndex, dragX, dragY, gridItems.length, matchIndexes, updateRenderedIndexesForViewport]);
+    }, [baseCoords, clampPan, collectionView.findEntryIndex, commitFocusedIndex, dragX, dragY, gridItems.length, matchIndexes, updateRenderedIndexesForViewport]);
 
     const handleViewportWheel = useCallback((event: WheelEvent) => {
         if (gridItems.length === 0 || event.ctrlKey) return;
@@ -1003,7 +1062,7 @@ export const GridView: React.FC<GridViewProps> = ({
             const initialDy = dragY.get();
             const initialFrame = computeHexCardFrame(coord, initialDx, initialDy, cardFrameOptions);
 
-            const animateEntrance = shouldAnimateItemEntrance(String(item.id));
+            const animateEntrance = !(nativeShell || flatMode) && shouldAnimateItemEntrance(String(item.id));
             const trackKey = String(item.id);
             const isRemovingTrack = removingTrackKeys.has(trackKey);
             // 「移形换影」: the hero (the card the viewport restores onto + centres)
@@ -1015,7 +1074,7 @@ export const GridView: React.FC<GridViewProps> = ({
             // 动画（大歌单打开时正是这些并发的动画和首帧的挂载一起把主线程压住）。
             const cardOnScreen = initialFrame.display !== 'none' && Number.parseFloat(initialFrame.opacity) > 0.05;
             const isMorphHero = Boolean(morphPlan?.kind === 'morph' && cardFlyInOffset && idx === morphHeroIndex);
-            const isMorphFlyIn = Boolean(morphPlan && cardFlyInOffset && cardOnScreen && !isMorphHero);
+            const isMorphFlyIn = Boolean(!(nativeShell || flatMode) && morphPlan && cardFlyInOffset && cardOnScreen && !isMorphHero);
             const morphFlyIn = isMorphFlyIn
                 ? collectionMorphFlyIn(
                     { x: coord.baseX, y: coord.baseY },
@@ -1115,7 +1174,7 @@ export const GridView: React.FC<GridViewProps> = ({
                         style={{
                             transformStyle: 'preserve-3d',
                             transformOrigin: 'center center',
-                            willChange: 'transform, opacity',
+                            willChange: (nativeShell || flatMode) ? 'auto' : 'transform, opacity',
                             pointerEvents: isRemovingTrack ? 'none' : undefined,
                             position: 'relative',
                         }}
@@ -1212,6 +1271,8 @@ export const GridView: React.FC<GridViewProps> = ({
         cardFlyInOffset,
         morphHeroIndex,
         morphPlan,
+        nativeShell,
+        flatMode,
     ]);
 
     // Refs for direct DOM manipulation — eliminates per-card useTransform subscriptions
@@ -1438,7 +1499,7 @@ export const GridView: React.FC<GridViewProps> = ({
 
     return (
         <motion.div
-            data-ponder-page-scope="grid-view-page"
+
             data-library-renderer="grid"
             data-library-surface="collection"
             initial={{ opacity: 0 }}
@@ -1769,7 +1830,7 @@ export const GridView: React.FC<GridViewProps> = ({
                             <div
                                 // 这一排里有重扫、整理 tag 和删除，删除是不可逆的 ——
                                 // 思索把整块认成一个目标，指着哪一颗都讲得到。
-                                data-ponder={isLocalCollection ? 'local-folder-actions' : 'online-collection-actions'}
+                                
                                 className="space-y-2 mt-4 pt-4 border-t shrink-0"
                                 style={{ borderTopColor: 'color-mix(in srgb, var(--text-primary) 12%, transparent)' }}
                             >
@@ -1856,7 +1917,7 @@ export const GridView: React.FC<GridViewProps> = ({
                                         onClick={handleEditModeToggle}
                                         disabled={isSourceActionPending}
                                         // 思索靠这个属性认出它。类名会改，属性不会。
-                                        data-ponder="grid-view-edit-mode"
+
                                         className={`w-full py-2.5 rounded-full text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${isEditMode ? 'bg-red-500/20 text-red-500 border border-red-500/30' : 'bg-zinc-800/10 dark:bg-zinc-100/10 hover:bg-zinc-900 hover:text-zinc-100 dark:hover:bg-zinc-100 dark:hover:text-zinc-900'}`}
                                     >
                                         {isSourceActionPending ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}

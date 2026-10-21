@@ -17,13 +17,11 @@ import AppDialogs from './components/app/dialogs/AppDialogs';
 import { useSettingsDialogModel } from './components/app/dialogs/useSettingsDialogModel';
 import AppOverlays from './components/app/overlays/AppOverlays';
 import AutomixModelReminder from './components/modal/AutomixModelReminder';
-import PonderHost from './components/ponder/PonderHost';
 // Lazy so animejs (~38KB gz) stays out of the bootstrap chunk: this overlay only ever draws when the
 // animation switch is on AND the mode is automix, both off by default, so it is mounted only then.
 const AutomixTransitionAnimation = lazy(() => import('./components/app/overlays/AutomixTransitionAnimation'));
 const loadLattice = () => import('./components/app/lattice/Lattice');
 const Lattice = lazy(loadLattice);
-import { UserGuideModal } from './components/modal/UserGuideModal';
 import ReleaseNotesDialog from './components/modal/ReleaseNotesDialog';
 import { PlaybackEntryViewPrompt } from './components/modal/playback-entry-view/PlaybackEntryViewPrompt';
 import { LatticeFmNotice } from './components/modal/playback-entry-view/LatticeFmNotice';
@@ -89,6 +87,7 @@ import { useLocalLibraryAutoScan } from './hooks/useLocalLibraryAutoScan';
 import { useElectronVideoExportController } from './hooks/useElectronVideoExportController';
 import { useElectronWindowPlaybackHandoff } from './hooks/useElectronWindowPlaybackHandoff';
 import { useMediaSessionBridge } from './hooks/useMediaSessionBridge';
+import { useNativeMediaShellBridge } from './hooks/useNativeMediaShellBridge';
 import { usePlayerChromeAutoHide } from './hooks/usePlayerChromeAutoHide';
 import { usePlaybackAudioBridge } from './hooks/usePlaybackAudioBridge';
 import { useTranscodeFallback } from './hooks/useTranscodeFallback';
@@ -116,6 +115,7 @@ import { resolveCommandPaletteSearchSource, resolveSearchSource, useSearchNaviga
 import { useOnlineProviderAccountStore } from './stores/useOnlineProviderAccountStore';
 import { useShallow } from 'zustand/react/shallow';
 import { clampMediaVolume, toSafeRemoteUrl } from './utils/appPlaybackHelpers';
+import { levelToOutputGain } from './utils/audioVolumeCurve';
 import { getOnlineProviderIdForSong, getPlaybackSongKey, isLocalPlaybackSong, isNavidromePlaybackSong, isStagePlaybackSong } from './utils/appPlaybackGuards';
 import { readLyricOffset, writeLyricOffset } from './utils/lyrics/lyricOffsetMemory';
 import { FALLBACK_AI_DUAL_THEME } from './services/themeSanitizer';
@@ -136,8 +136,11 @@ import { selectDesktopSettingsSnapshot, useDesktopSettingsStore } from './stores
 import { selectSleepTimerSnapshot, useSleepTimerStore } from './stores/useSleepTimerStore';
 import { selectStageSettingsSnapshot, useStageSettingsStore } from './stores/useStageSettingsStore';
 import { selectAudioSettingsSnapshot, useAudioSettingsStore } from './stores/useAudioSettingsStore';
+import { useNativeVolumeMirrorStore } from './stores/useNativeVolumeMirrorStore';
+import { isNativeAndroidShell } from './services/foliaExtensionBridge';
 import { useSettingsModalStore } from './stores/useSettingsModalStore';
 import { audioBands, audioPower, bass, currentTime, lowMid, lyricCurrentTime, mid, spectrum, treble, vocal } from './stores/motionSignals';
+import { saveToCache } from './services/db';
 import { useAppChromeStore } from './stores/useAppChromeStore';
 import { useAppViewStore } from './stores/useAppViewStore';
 import { selectDisplayCoverUrl, selectDisplayDuration, selectDisplayLyrics, selectDisplayPlayerState, selectDisplaySong, selectIsShowingTail, usePlaybackStore } from './stores/usePlaybackStore';
@@ -171,6 +174,20 @@ const ONLINE_AUDIO_URL_REFRESH_BUFFER_MS = 60 * 1000;
 const LOCAL_TAIL_DECODE_ERROR_TOLERANCE_SEC = 3;
 /** How many seconds before a track ends the now playing card previews the queue's next track. */
 const NEXT_UP_LEAD_SEC = 5;
+
+/**
+ * 系统媒体音量是否真的在缩放声音（而非 DiLink 那种"写得进、回读得出、功放不动"的假可调）。
+ *
+ * 判据必须是"原生壳 + 探测说可调 + 实测档位低于满档"三件同时成立：只看 probe 会在 DiLink 上
+ * 假通过，把网页增益钉死成 1，表现为永远最大声。App 的 syncOutputGain 与 duck 层级共用这一处。
+ */
+const resolveSystemVolumeGoverns = (): boolean => {
+    const mirror = useNativeVolumeMirrorStore.getState();
+    return isNativeAndroidShell()
+        && mirror.fixedVolume === false
+        && mirror.systemVolume !== null
+        && mirror.systemVolume < 0.999;
+};
 
 export default function App() {
     countRender('App');
@@ -361,6 +378,11 @@ export default function App() {
         abortTransition: () => void;
         transitionDisplay: { song: SongResult | null } | null;
     } | null>(null);
+    /**
+     * 软件音量的元素层出口（automix deck 的 element.volume），由 useAutomixDecks 在下方注册。
+     * 放在 ref 里是因为 syncOutputGain 定义得比 automix 早，而每个音量写入点都要能落到这一层。
+     */
+    const deckVolumeSinkRef = useRef<((level: number) => void) | null>(null);
     const queueScrollRef = useRef<HTMLDivElement>(null);
     // Buffer progress debug helper. Uncomment this ref, the reset effect below,
     // and the audio `onProgress` handler to log buffered percent again.
@@ -518,39 +540,67 @@ export default function App() {
 
     const getTargetPlaybackVolume = useCallback(() => (isMuted ? 0 : volume), [isMuted, volume]);
 
+    // 滑杆档位 → 真正写进音频图的线性振幅。人耳感知接近对数，档位直接当振幅用时 20% 的听感
+    // 仍有别家播放器 50% 那么响（车机实测），所以统一经这条等响曲线换算，100% 仍是满功率。
+    const getTargetOutputGain = useCallback(
+        () => (isMuted ? 0 : levelToOutputGain(volume)),
+        [isMuted, volume],
+    );
+
     const persistLastPlaybackCache = useCallback(persistPlaybackCache, []);
 
-    const syncOutputGain = useCallback((targetVolume: number, smoothing = 0.015) => {
-        const clampedVolume = clampMediaVolume(targetVolume);
+    /**
+     * 把**振幅**落到输出层（gainNode + deck 元素，两条路径互斥）。
+     *
+     * duck 之类"相对衰减"的调用点直接传振幅；用户音量走 [syncOutputGain]，由它先做等响曲线换算。
+     */
+    const applyOutputGain = useCallback((gain: number, smoothing = 0.015) => {
+        const outputGain = Math.min(1, Math.max(0, Number.isFinite(gain) ? gain : 0));
 
         if (gainNodeRef.current && audioContextRef.current) {
             // Volume only. ReplayGain lives on each deck now, because during a blend the two
             // tracks need their own compensation and this node is shared by both.
             if (smoothing <= 0) {
                 gainNodeRef.current.gain.setValueAtTime(
-                    clampedVolume,
+                    outputGain,
                     audioContextRef.current.currentTime
                 );
             } else {
                 gainNodeRef.current.gain.setTargetAtTime(
-                    clampedVolume,
+                    outputGain,
                     audioContextRef.current.currentTime,
                     smoothing
                 );
             }
-
-            if (audioRef.current) {
-                audioRef.current.volume = 1;
-                audioRef.current.muted = false;
-            }
+            // deck 元素那一层同样写一遍：图没接上时（车机上 AudioContext 被策略拦掉、deck 建链
+            // 失败）gainNode 是悬空的，写了也没人听，只有 element.volume 能真的改变响度。
+            deckVolumeSinkRef.current?.(outputGain);
             return;
         }
 
+        deckVolumeSinkRef.current?.(outputGain);
         if (audioRef.current) {
-            audioRef.current.volume = clampedVolume;
+            audioRef.current.volume = outputGain;
             audioRef.current.muted = isMuted;
         }
     }, [isMuted]);
+
+    const syncOutputGain = useCallback((targetVolume: number, smoothing = 0.015) => {
+        const clampedVolume = clampMediaVolume(targetVolume);
+        // 原生壳若确认系统音量真的能用，响度由系统那一层负责，网页侧保持单位增益；
+        // 否则（DiLink 这类固定音量车机）网页这层就是唯一音量闸。初始 null 一律按"网页负责"，
+        // 宁可小声也不要一启动就满功率。
+        //
+        // "确认能用"不能只看 probe：DiLink 上 setStreamVolume 写进去的值会被 AudioService
+        // 原样缓存、getStreamVolume 也回读得出来，探测因此假通过，可真实增益在功放里、APP 碰不到。
+        // 只看 fixedVolume===false 的后果是 outputVolume 被钉死成 1——正是"永远最大声、滑杆
+        // 怎么拖都没用、音量键也没反应"这三件事同时出现的原因。所以再加一道实证：系统音量必须
+        // 真的低于满档，才说明"系统那一层确实在缩放声音"，这时才把响度交出去。
+        applyOutputGain(
+            isMuted ? 0 : (resolveSystemVolumeGoverns() ? 1 : levelToOutputGain(clampedVolume)),
+            smoothing,
+        );
+    }, [applyOutputGain, isMuted]);
 
     const { handleAudioOutputDeviceChange } = useAudioOutputDevice({
         audioRef,
@@ -969,7 +1019,32 @@ export default function App() {
         shouldAutoPlayRef: shouldAutoPlay,
         currentSongRef,
         playbackGenerationRef,
+        pendingResumeTimeRef,
+        // 上次退出在放歌 + 开关打开 → 续播后直接进播放页（不走"播放不跳转"的设置）
+        onResumeToPlayer: navigateToPlayer,
     });
+
+    // 播放进度 5s 防抖落库（Auxio deferSave 思路）：播放中每 5s 写一次 last_position；
+    // 暂停/切歌立即写。恢复侧差 >1s 才 seek（useSessionRestoreController）。
+    // 同时记 playing：下次启动据此判断"上次退出时是不是在放歌"（启动续播开关，见 resumePlayingOnLaunch）。
+    // IDLE 不写：冷启动那一刻还没恢复，写进去的 false 会把上次的真实状态覆盖掉。
+    useEffect(() => {
+        const writePosition = () => {
+            if (playerState === PlayerState.IDLE) return;
+            const ms = Math.round(currentTime.get() * 1000);
+            void saveToCache('last_position', {
+                ms,
+                playing: playerState === PlayerState.PLAYING,
+                updatedAt: Date.now(),
+            });
+        };
+        if (playerState !== PlayerState.PLAYING) {
+            writePosition();
+            return;
+        }
+        const timer = window.setInterval(writePosition, 5000);
+        return () => window.clearInterval(timer);
+    }, [playerState, currentSong]);
 
     const localLibraryCatalog = useLocalLibraryCatalog(localSongs);
     const openHomeCollection = useCallback(
@@ -1206,6 +1281,16 @@ export default function App() {
         if (element) currentTime.set(element.currentTime);
     }, [audioRef, currentTime, getDisplayElement, isShowingTail]);
 
+    // 把 deck 元素层接到音量出口上。音量一变就重落一次，顺带覆盖 deck 换源/换元素的时刻。
+    const applyElementVolume = automix.applyElementVolume;
+    useEffect(() => {
+        deckVolumeSinkRef.current = applyElementVolume;
+        applyElementVolume(getTargetOutputGain());
+        return () => {
+            deckVolumeSinkRef.current = null;
+        };
+    }, [applyElementVolume, getTargetOutputGain]);
+
     // Restore the displayed song's remembered manual offset (0 when never adjusted, so a fresh
     // song behaves exactly like the old reset). Keyed on the DISPLAYED song, not the playing one:
     // this is what the lyrics on screen are read against, and firing it when a blend arms would
@@ -1436,6 +1521,9 @@ export default function App() {
         taskbarPlayerStateRef,
     } = useTransportCommandRefs({ resumePlayback, pausePlayback, handlePrevTrack, handleNextTrack });
 
+    // seek 入口 ref：W3C 'seekto' 与原生 method 'seek' 共用（在 seekMainAudio 定义后赋值）。
+    const mediaSessionSeekRef = useRef<((timeSec: number) => void) | null>(null);
+
     useMediaSessionBridge({
         audioRef,
         // All three describe the DISPLAYED track, and that is the whole of the fix: the metadata,
@@ -1455,7 +1543,44 @@ export default function App() {
         mediaSessionPauseRef,
         mediaSessionPrevRef,
         mediaSessionNextRef,
+        mediaSessionSeekRef,
         isNowPlayingControlDisabledRef,
+    });
+
+    // 原生壳 MediaSession/AudioFocus 配套：上报播放状态 + 消费 method 'seek'/'focus' 下行。
+    // duck 出口保持稳定引用：bridge 的订阅 effect 以它为依赖，内联箭头会让每次渲染都重订阅。
+    const handleNativeDuckLevel = useCallback((ducked: boolean) => {
+        // 导航语音 duck：写 gainNode（音频已接入 WebAudio，element.volume 未必生效）。
+        // base 取当前输出振幅（系统管音量时网页层是单位增益），duck 再乘 0.2 ≈ -14dB，
+        // 与音量档位无关——这是相对衰减，不能再过一次等响曲线。
+        const base = resolveSystemVolumeGoverns() ? 1 : getTargetOutputGain();
+        applyOutputGain(ducked ? base * 0.2 : base, 0.05);
+    }, [applyOutputGain, getTargetOutputGain]);
+
+    // 方向盘/车机音量键：固定音量车机上系统那一层是死的，直接改应用内音量。
+    const handleNativeVolumeKey = useCallback((delta: number) => {
+        const settings = useAudioSettingsStore.getState();
+        if (settings.isMuted) settings.handleSetMuted(false);
+        const next = Math.min(1, Math.max(0.02, settings.volume + delta));
+        settings.handleSetVolume(next);
+    }, []);
+
+    const handleNativeVolumeSet = useCallback((level: number) => {
+        const settings = useAudioSettingsStore.getState();
+        if (settings.isMuted && level > 0) settings.handleSetMuted(false);
+        settings.handleSetVolume(Math.min(1, Math.max(0.02, level)));
+    }, []);
+
+    useNativeMediaShellBridge({
+        audioRef,
+        currentSong: displaySong,
+        playerState: displayPlayerState,
+        seekRef: mediaSessionSeekRef,
+        unknownArtistLabel: t('ui.unknownArtist'),
+        setDuckLevel: handleNativeDuckLevel,
+        onVolumeKey: handleNativeVolumeKey,
+        onVolumeSet: handleNativeVolumeSet,
+        volume: isMuted ? 0 : volume,
     });
 
     const {
@@ -2050,6 +2175,9 @@ export default function App() {
             void publishStagePlayerPlaybackUpdate();
         }
     }, [publishStagePlayerPlaybackUpdate]);
+
+    // W3C 'seekto' / 原生 method 'seek' 共用同一 seek 入口。
+    mediaSessionSeekRef.current = seekMainAudio;
 
     const handleMonetLyricLineSeek = useCallback((lyricTimeSec: number) => {
         if (isNowPlayingControlDisabled) {
@@ -2839,10 +2967,6 @@ export default function App() {
                 switches that can open it, so that both reach the same one. */}
             <AutomixModelReminder isDaylight={isDaylight} />
 
-            {/* 思索教程。常驻的只有悬停探测和提示胶囊；教程层自己走 React.lazy，
-                animejs 不进 bootstrap chunk。 */}
-            <PonderHost theme={theme} isDaylight={isDaylight} />
-
             {currentView === 'player' && !showLyricMatchModal && (
                 <PlayerPanel model={playerPanelModel} />
             )}
@@ -2898,7 +3022,6 @@ export default function App() {
                 theme={theme}
                 onClose={startupExperience.closeReleaseNotes}
             />
-            <UserGuideModal theme={theme} />
             <PlaybackEntryViewPrompt theme={theme} />
             <LatticeFmNotice />
         </AppShell>

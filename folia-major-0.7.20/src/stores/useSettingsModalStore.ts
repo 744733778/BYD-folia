@@ -34,18 +34,11 @@ export type SettingsModalState = {
     initialAnchor?: { id: SettingsAnchorId; seq: number } | null;
 };
 
-// Separate from the retired guide key so people who saw the old carousel still receive the Ponder lesson.
-const LAST_SEEN_GUIDE_VERSION_STORAGE_KEY = 'folia_last_seen_ponder_onboarding_version';
-
 export type SettingsModalUiState = {
     appLanguagePreference: AppLanguagePreference;
     pinnedCommandIds: PinnedCommandIds;
     isSubSettingsViewOpen: boolean;
     settingsModalState: SettingsModalState;
-    lastSeenGuideVersion: string | null;
-    isUserGuideModalOpen: boolean;
-    setLastSeenGuideVersion: (version: string) => void;
-    setIsUserGuideModalOpen: (isOpen: boolean) => void;
     setIsSubSettingsViewOpen: (open: boolean) => void;
     openSettings: (
         initialTab?: SettingsModalInitialTab,
@@ -69,15 +62,6 @@ export const useSettingsModalStore = create<SettingsModalUiState>((set, get) => 
         initialVisualizerSection: null,
         initialAnchor: null,
     },
-    lastSeenGuideVersion: typeof window !== 'undefined' ? localStorage.getItem(LAST_SEEN_GUIDE_VERSION_STORAGE_KEY) : null,
-    isUserGuideModalOpen: false,
-    setLastSeenGuideVersion: (version) => {
-        if (typeof window !== 'undefined') {
-            localStorage.setItem(LAST_SEEN_GUIDE_VERSION_STORAGE_KEY, version);
-        }
-        set({ lastSeenGuideVersion: version });
-    },
-    setIsUserGuideModalOpen: (isOpen) => set({ isUserGuideModalOpen: isOpen }),
     setIsSubSettingsViewOpen: (open) => set({ isSubSettingsViewOpen: open }),
     openSettings: (initialTab = 'help', initialSubview = null, initialVisualizerSection = null, initialAnchorId = null) => set({
         settingsModalState: {
@@ -139,10 +123,6 @@ export const selectSettingsModalSnapshot = (state: SettingsModalUiState) => ({
     pinnedCommandIds: state.pinnedCommandIds,
     isSubSettingsViewOpen: state.isSubSettingsViewOpen,
     settingsModalState: state.settingsModalState,
-    lastSeenGuideVersion: state.lastSeenGuideVersion,
-    isUserGuideModalOpen: state.isUserGuideModalOpen,
-    setLastSeenGuideVersion: state.setLastSeenGuideVersion,
-    setIsUserGuideModalOpen: state.setIsUserGuideModalOpen,
     setIsSubSettingsViewOpen: state.setIsSubSettingsViewOpen,
     openSettings: state.openSettings,
     closeSettings: state.closeSettings,

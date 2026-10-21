@@ -134,7 +134,7 @@ export const RunBar: React.FC<{
     onStart: () => void;
     onCancel: () => void;
 }> = ({ tone, statusText, isRunning, canStart, startLabel, cancelLabel, onStart, onCancel }) => (
-    <div data-ponder-lyric-export-run className="shrink-0 border-t px-4 py-3" style={{ borderColor: tone.idleBorder }}>
+    <div className="shrink-0 border-t px-4 py-3" style={{ borderColor: tone.idleBorder }}>
         <div className="mx-auto flex w-full max-w-lg items-center justify-between gap-4">
             <div className="min-w-0 text-xs opacity-60" style={{ color: 'var(--text-secondary)' }} aria-live="polite">
                 {statusText}

@@ -13,6 +13,7 @@ import { getAudioEqualizerCustomSlotIndex, isAudioEqualizerCustomSlotId, readSto
 import { AUDIO_SOUND_PRESETS } from '../utils/audioPresets';
 import { getStoredBoolean, setStoredBoolean } from './storagePrimitives';
 import { setStatusMessage } from './useStatusMessageStore';
+import { isNativeAndroidShell } from '../services/foliaExtensionBridge';
 import i18n from '../i18n/config';
 
 export const CACHE_SIZE_KEY = 'folia_cache_size';
@@ -26,6 +27,12 @@ export const MEDIA_CACHE_LIMIT_GB_KEY = 'folia_media_cache_limit_gb';
 
 /** Lab switch: start the restored last session playing instead of waiting for a press. */
 export const AUTO_PLAY_ON_LAUNCH_KEY = 'folia_auto_play_on_launch';
+
+/**
+ * 打开应用时，如果上次退出时正在放歌，就接着放并直接进播放页。
+ * 与上面的 Lab 开关不同：这个只在"上次确实在放"时生效，暂停退出就还是暂停恢复。
+ */
+export const RESUME_PLAYING_ON_LAUNCH_KEY = 'folia_resume_playing_on_launch';
 
 export const ENABLE_TRANSCODE_FALLBACK_KEY = 'folia_enable_transcode_fallback';
 
@@ -131,6 +138,12 @@ const readStoredVolume = () => {
         return 1;
     }
 
+    // 原生安卓壳：音量完全交给系统媒体音量，网页增益恒 1。固定端口后 localStorage 跨启动持久，
+    // 旧版本残留的 player_volume 不能 hydrate 进 store（否则 store.volume 经 syncOutputGain 钉死网页增益）。
+    if (isNativeAndroidShell()) {
+        return 1;
+    }
+
     const saved = localStorage.getItem('player_volume');
     const parsed = saved !== null ? parseFloat(saved) : 1;
     return Number.isFinite(parsed) ? parsed : 1;
@@ -144,6 +157,8 @@ export type AudioSettingsState = {
     queueAddBehavior: QueueAddBehavior;
     /** Whether entering the app starts the restored session by itself. Off unless asked for. */
     autoPlayOnLaunch: boolean;
+    /** 上次退出时在放歌 → 本次打开接着放并进播放页。On by default（车机最常用）。 */
+    resumePlayingOnLaunch: boolean;
     /** Electron-only recovery for local and Navidrome formats Chromium cannot decode. */
     enableTranscodeFallback: boolean;
     /** Report finished plays of online NetEase tracks to the signed-in account. Off by default. */
@@ -163,6 +178,7 @@ export type AudioSettingsState = {
     handleSetMediaCacheLimitGb: (gigabytes: number) => void;
     handleSetQueueAddBehavior: (behavior: QueueAddBehavior) => void;
     handleToggleAutoPlayOnLaunch: (enable: boolean) => void;
+    handleToggleResumePlayingOnLaunch: (enable: boolean) => void;
     handleToggleTranscodeFallback: (enable: boolean) => void;
     handleToggleNeteaseScrobble: (enable: boolean) => void;
     handleTogglePlaybackFade: (enable: boolean) => void;
@@ -187,6 +203,7 @@ export const useAudioSettingsStore = create<AudioSettingsState>((set, get) => ({
     mediaCacheLimitGb: readStoredMediaCacheLimitGb(),
     queueAddBehavior: readStoredQueueAddBehavior(),
     autoPlayOnLaunch: getStoredBoolean(AUTO_PLAY_ON_LAUNCH_KEY, false),
+    resumePlayingOnLaunch: getStoredBoolean(RESUME_PLAYING_ON_LAUNCH_KEY, true),
     enableTranscodeFallback: getStoredBoolean(
         ENABLE_TRANSCODE_FALLBACK_KEY,
         typeof window !== 'undefined' && Boolean(window.electron?.requestTranscodeFallback),
@@ -200,7 +217,8 @@ export const useAudioSettingsStore = create<AudioSettingsState>((set, get) => ({
     audioEqualizerSettings: readStoredAudioEqualizerSettings(),
     isAudioEqualizerOpen: false,
     volume: readStoredVolume(),
-    isMuted: getStoredBoolean('player_is_muted', false),
+    // 原生壳：静音同样交给系统，不 hydrate 持久的静音状态（网页增益须恒 1）。
+    isMuted: isNativeAndroidShell() ? false : getStoredBoolean('player_is_muted', false),
     loopMode: readStoredLoopMode(),
     setAudioQuality: (quality) => {
         if (typeof window !== 'undefined') {
@@ -236,6 +254,10 @@ export const useAudioSettingsStore = create<AudioSettingsState>((set, get) => ({
             type: 'info',
             text: i18n.t('notifications.' + (enable ? 'autoPlayOnLaunchOn' : 'autoPlayOnLaunchOff')),
         });
+    },
+    handleToggleResumePlayingOnLaunch: (enable) => {
+        setStoredBoolean(RESUME_PLAYING_ON_LAUNCH_KEY, enable);
+        set({ resumePlayingOnLaunch: enable });
     },
     handleToggleTranscodeFallback: (enable) => {
         setStoredBoolean(ENABLE_TRANSCODE_FALLBACK_KEY, enable);
@@ -346,6 +368,7 @@ export const selectAudioSettingsSnapshot = (state: AudioSettingsState) => ({
     mediaCacheLimitGb: state.mediaCacheLimitGb,
     queueAddBehavior: state.queueAddBehavior,
     autoPlayOnLaunch: state.autoPlayOnLaunch,
+    resumePlayingOnLaunch: state.resumePlayingOnLaunch,
     enableTranscodeFallback: state.enableTranscodeFallback,
     neteaseScrobbleEnabled: state.neteaseScrobbleEnabled,
     playbackFadeEnabled: state.playbackFadeEnabled,
@@ -361,6 +384,7 @@ export const selectAudioSettingsSnapshot = (state: AudioSettingsState) => ({
     handleSetMediaCacheLimitGb: state.handleSetMediaCacheLimitGb,
     handleSetQueueAddBehavior: state.handleSetQueueAddBehavior,
     handleToggleAutoPlayOnLaunch: state.handleToggleAutoPlayOnLaunch,
+    handleToggleResumePlayingOnLaunch: state.handleToggleResumePlayingOnLaunch,
     handleToggleTranscodeFallback: state.handleToggleTranscodeFallback,
     handleToggleNeteaseScrobble: state.handleToggleNeteaseScrobble,
     handleTogglePlaybackFade: state.handleTogglePlaybackFade,

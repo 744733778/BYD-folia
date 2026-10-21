@@ -13,8 +13,8 @@ import { selectDisplayPlayerState, usePlaybackStore } from '../stores/usePlaybac
 type TransportCommandRefsParams = {
     resumePlayback: () => Promise<void>;
     pausePlayback: () => void;
-    handlePrevTrack: () => void;
-    handleNextTrack: (options?: never) => Promise<void>;
+    handlePrevTrack: (options?: { ignoreStageGuard?: boolean }) => void;
+    handleNextTrack: (options?: { ignoreStageGuard?: boolean }) => Promise<void>;
 };
 
 export const useTransportCommandRefs = ({
@@ -39,6 +39,8 @@ export const useTransportCommandRefs = ({
     const taskbarPlayerStateRef = useRef(displayPlayerState);
 
     useEffect(() => {
+        // 媒体键通道统一带 ignoreStageGuard：方向盘/线控/任务栏/远程是"外置"控制，
+        // 用户停在全屏歌词舞台时也必须能切歌。UI 内按钮不经这里，照旧被 stage 禁用。
         mediaSessionPlayRef.current = resumePlayback;
     }, [resumePlayback]);
 
@@ -47,11 +49,11 @@ export const useTransportCommandRefs = ({
     }, [pausePlayback]);
 
     useEffect(() => {
-        mediaSessionPrevRef.current = handlePrevTrack;
+        mediaSessionPrevRef.current = () => handlePrevTrack({ ignoreStageGuard: true });
     }, [handlePrevTrack]);
 
     useEffect(() => {
-        mediaSessionNextRef.current = handleNextTrack;
+        mediaSessionNextRef.current = () => handleNextTrack({ ignoreStageGuard: true });
     }, [handleNextTrack]);
 
     useEffect(() => {

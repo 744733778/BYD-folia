@@ -45,6 +45,12 @@ export type NextTrackOptions = PlaybackNavigationOptions & {
      * that failed to play - that failure belongs to the active deck, not to what is on screen.
      */
     fromSong?: SongResult;
+    /**
+     * 媒体键（车机方向盘/线控）专用：无视全屏歌词舞台的「控制禁用」早退。
+     * 方向盘是车上唯一的物理传输控制，用户停在任何界面（包括舞台）按上下曲/暂停都必须生效；
+     * UI 内的按钮仍按原样被 stage guard 禁用。
+     */
+    ignoreStageGuard?: boolean;
 };
 
 export type UnavailableReplacementRequest = {

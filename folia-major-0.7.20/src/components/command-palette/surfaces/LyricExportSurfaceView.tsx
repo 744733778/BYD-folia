@@ -129,14 +129,14 @@ export default function LyricExportSurfaceView({
     const lrcSelected = options.formats.includes('lrc');
 
     return (
-        <div data-ponder="lyric-export-surface" className="flex h-full flex-col">
+        <div className="flex h-full flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-6">
                 <div className="mx-auto w-full max-w-lg space-y-6">
                     <p className="text-xs leading-relaxed opacity-55" style={{ color: 'var(--text-secondary)' }}>
                         {t('lyricExport.surfaceDesc')}
                     </p>
 
-                    <section data-ponder-lyric-export-scope>
+                    <section>
                         <SectionHeading icon={Layers} label={t('lyricExport.sectionScope')} />
                         <div className="grid grid-cols-2 gap-2">
                             <OptionCard tone={tone} icon={Cloud} label={t('lyricExport.scopeOnline')} description={t('lyricExport.scopeOnlineDesc')}
@@ -146,7 +146,7 @@ export default function LyricExportSurfaceView({
                         </div>
                     </section>
 
-                    <section data-ponder-lyric-export-formats>
+                    <section>
                         <SectionHeading icon={FileText} label={t('lyricExport.sectionFormats')} />
                         <div className="grid grid-cols-2 gap-2">
                             <OptionCard tone={tone} icon={FileJson} label={t('lyricExport.formatFia')} description={t('lyricExport.formatFiaDesc')}
@@ -172,7 +172,7 @@ export default function LyricExportSurfaceView({
                         )}
                     </section>
 
-                    <section data-ponder-lyric-export-names>
+                    <section>
                         <SectionHeading icon={Tag} label={t('lyricExport.sectionNames')} />
                         <ToggleCard tone={tone} cardClass={settingsCardClass} toggleOffBackgroundClass={toggleOffBackgroundClass}
                             label={t('lyricExport.resolveOnline')} description={t('lyricExport.resolveOnlineDesc')}

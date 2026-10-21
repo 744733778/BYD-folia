@@ -6,6 +6,7 @@ import { getActiveEntities } from '../../../utils/localLibraryIndex';
 import type { LibraryDirectorySelectionType } from '../contracts/directory';
 import type { LibraryHomeActionsSnapshot, LibraryHomeCard, LibraryHomeListAction } from '../contracts/homeModel';
 import { isHomeImportBusy } from './homeSources';
+import { detectNativeLibrary } from '../../../services/nativeLibrary/nativeLibrarySource';
 
 // src/library/core/model/localHomeModel.ts
 // Builds local-library overview groups for the desktop Grid3D surface.
@@ -28,7 +29,7 @@ const getLocalCoverUrl = (songs: LocalSong[], coverAssetUrl: LocalCoverAssetUrlR
 
     if (!preferredSong) return undefined;
 
-    const localCoverUrl = coverAssetUrl(preferredSong.localCoverAssetId, 512) || undefined;
+    const localCoverUrl = preferredSong.nativeCoverUrl || coverAssetUrl(preferredSong.localCoverAssetId, 512) || undefined;
     if (preferredSong.useOnlineCover) {
         return preferredSong.onlineMetadata?.coverUrl || localCoverUrl;
     }
@@ -274,11 +275,11 @@ export const localBatchSelectionType = (section: LocalHomeSectionKey): LibraryDi
     section === 'folders' || section === 'albums' || section === 'artists' ? section : null
 );
 
-/** 本地页签右上角的三个导入动作：文案随进行中的动作变，任何一个在进行或扫描中时都禁用。 */
+/** 本地页签右上角的导入动作：文案随进行中的动作变，任何一个在进行或扫描中时都禁用。 */
 export const resolveLocalHomeActions = (snapshot: LibraryHomeActionsSnapshot): LibraryHomeListAction[] => {
     const busy = isHomeImportBusy(snapshot);
     const scanning = Boolean(snapshot.scan?.active) || snapshot.refreshingFolders;
-    return [
+    const actions: LibraryHomeListAction[] = [
         {
             id: 'import-folder',
             labelKey: snapshot.importingFolder ? 'localMusic.importing' : 'localMusic.importFolder',
@@ -301,4 +302,7 @@ export const resolveLocalHomeActions = (snapshot: LibraryHomeActionsSnapshot): L
             disabled: busy || snapshot.importingPlaylist,
         },
     ];
+    // 安卓原生壳（MediaStore 曲库）：公共音乐目录由系统扫描器维护，没有"选目录"这一步，
+    // 再摆一个「导入文件夹」只会让人以为要手动选。入口去掉，保留「刷新」。
+    return detectNativeLibrary() ? actions.filter(action => action.id !== 'import-folder') : actions;
 };

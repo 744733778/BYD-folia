@@ -42,6 +42,13 @@ type UseSessionRestoreControllerParams = {
     currentSongRef: MutableRefObject<string | number | null>;
     /** Bumped with each commit of the current song (see usePlaybackRuntimeRefs). */
     playbackGenerationRef: MutableRefObject<number>;
+    /** 恢复上次进度（秒）；写入后由 onLoadedMetadata seek（差 >1s 才跳，紧恢复不跳）。 */
+    pendingResumeTimeRef: MutableRefObject<number | null>;
+    /**
+     * 上次退出时正在放歌、且开关打开时调用：直接进播放页。
+     * 与"播放时是否跳转"的设置无关——用户要求这一种启动场景必须落在播放界面。
+     */
+    onResumeToPlayer?: () => void;
 };
 
 // Restores the main playback session without pushing more boot logic into App.tsx.
@@ -59,6 +66,8 @@ export function useSessionRestoreController({
     shouldAutoPlayRef,
     currentSongRef,
     playbackGenerationRef,
+    pendingResumeTimeRef,
+    onResumeToPlayer,
 }: UseSessionRestoreControllerParams) {
     const audioQuality = useAudioSettingsStore(state => state.audioQuality);
 
@@ -149,10 +158,26 @@ export function useSessionRestoreController({
                 playbackGenerationRef.current += 1;
                 setPlayQueue(lastQueue && lastQueue.length > 0 ? lastQueue : [lastSong]);
 
+                // 进度恢复：读 5s 防抖落库的 last_position（毫秒 + 退出时是否在放）。
+                // 差 >1s 才 arm seek，紧恢复（杀进程即恢复，误差 <1s）不跳歌——与 Auxio 的恢复策略一致。
+                let lastPositionRecord: { ms: number; playing?: boolean } | null = null;
+                try {
+                    lastPositionRecord = await getFromCache<{ ms: number; playing?: boolean }>('last_position');
+                    if (lastPositionRecord && Number.isFinite(lastPositionRecord.ms) && lastPositionRecord.ms > 1000) {
+                        pendingResumeTimeRef.current = lastPositionRecord.ms / 1000;
+                    }
+                } catch {
+                    // 进度恢复失败不阻塞会话恢复。
+                }
+
                 // Read at restore time rather than subscribed: this effect runs once, and the
                 // switch only ever has to answer for this one launch.
-                const autoPlayOnLaunch = useAudioSettingsStore.getState().autoPlayOnLaunch;
-                if (autoPlayOnLaunch) {
+                const settings = useAudioSettingsStore.getState();
+                // 启动续播：开关开着（默认开）就直接继续播放——不再看上次退出时是否在放，
+                // 暂停退出下次打开也接着放（用户要求"第二次打开直接继续播放"）。
+                // Lab 里的 autoPlayOnLaunch 是无条件自动播，与开关取并集。
+                const resumePlaying = settings.resumePlayingOnLaunch !== false;
+                if (settings.autoPlayOnLaunch || resumePlaying) {
                     // Arm before the source lands. The bridge's autoplay effect fires on the commit
                     // that gives the deck its src, and it spends this flag there; setting it after
                     // would miss that run and leave the deck buffered in silence.
@@ -175,6 +200,9 @@ export function useSessionRestoreController({
                     // the intent now belongs to that one.
                     if (outcome === 'failed') {
                         shouldAutoPlayRef.current = false;
+                    } else if (resumePlaying && currentSongRef.current === getPlaybackSongKey(lastSong)) {
+                        // 续播成立：直接落在播放页，不用用户再从首页点进去。
+                        onResumeToPlayer?.();
                     }
                 } catch (error) {
                     // No source ever landed, so the intent was never spent. Left standing it would

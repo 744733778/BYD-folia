@@ -47,13 +47,6 @@ const visibleTile = (page: Page, kind: 'card' | 'entry', exclude?: string) => pa
 
 const tile = (page: Page, slotKey: string) => page.locator(`[data-bravais-slot="${slotKey}"]`);
 
-/** 此刻打开「思索当前页面」会进哪一篇（与长按 Ctrl+G、触屏灯泡同一条解析）。 */
-const pageTarget = (page: Page) => page.evaluate(async () => {
-    const modulePath = '/src/services/ponder/pagePonderTarget.ts';
-    const { readCurrentPagePonderTarget } = await import(/* @vite-ignore */ modulePath);
-    return readCurrentPagePonderTarget();
-});
-
 /** 点开一张首页卡片，等集合层接管墙面。 */
 const openCard = async (page: Page) => {
     const slot = await visibleTile(page, 'card');
@@ -77,9 +70,7 @@ test.describe('[bravais] skeleton wall', () => {
         await expect(seam(page)).toHaveAttribute('data-bravais-seam', 'home');
         await expect(seam(page)).toHaveAttribute('data-bravais-seam-level', 'full');
         await expect(seam(page).locator('[data-bravais-tab="playlist"]')).toHaveAttribute('aria-selected', 'true');
-        // 页面教程是墙（bravais-wall）：长按 Ctrl+G、触屏灯泡、命令面板「思索当前页面」都解析到它。
-        await expect(page.locator('[data-library-surface="home"][data-ponder-page-scope="bravais-wall"]')).toHaveCount(1);
-        expect(await pageTarget(page)).toBe('bravais-wall');
+        await expect(page.locator('[data-library-surface="home"][data-page-scope="bravais-wall"]')).toHaveCount(1);
         // 无限拼贴：五张歌单卡在墙上循环铺开，屏内都看得到。
         const names = await page.locator('.bravais-tile[data-library-card] strong').evaluateAll(
             elements => [...new Set(elements.map(element => element.getAttribute('aria-label')))].sort(),
@@ -93,8 +84,7 @@ test.describe('[bravais] skeleton wall', () => {
         await expect(tile(page, slot).locator('.lattice-poster-badge')).toHaveText(/^0*1$/);
         await expect(seam(page)).toHaveAttribute('data-bravais-seam', 'full');
         await expect(seam(page).locator('.bravais-seam-vtitle')).toHaveText(name);
-        await expect(page.locator('[data-library-surface="collection"][data-ponder-page-scope="bravais-wall"]')).toHaveCount(1);
-        expect(await pageTarget(page)).toBe('bravais-wall');
+        await expect(page.locator('[data-library-surface="collection"][data-page-scope="bravais-wall"]')).toHaveCount(1);
 
         await seam(page).locator('[data-bravais-seam-action="back"]').click();
         await expect.poll(() => stack(page)).toEqual([]);

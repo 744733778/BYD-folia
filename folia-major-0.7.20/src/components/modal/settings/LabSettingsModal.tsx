@@ -14,8 +14,7 @@ import { useDesktopSettingsStore } from '../../../stores/useDesktopSettingsStore
 
 // src/components/modal/settings/LabSettingsModal.tsx
 // Experimental settings subview kept outside SettingsModal to avoid another giant inline panel.
-// Graphics switches now live in GraphicsSettingsSubview, the mod switch in ModsSettingsSubview and
-// the Ponder hints in GeneralSettingsSubview.
+// Graphics switches now live in GraphicsSettingsSubview and the mod switch in ModsSettingsSubview.
 
 type LabSettingsModalProps = {
     isOpen: boolean;

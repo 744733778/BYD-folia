@@ -16,6 +16,7 @@ import { setIsPanelOpen, useAppViewStore } from '../stores/useAppViewStore';
 import { setIsDevDebugOverlayVisible, setIsMemoryMonitorVisible } from '../stores/useAppChromeStore';
 import { useAudioSettingsStore } from '../stores/useAudioSettingsStore';
 import { currentTime } from '../stores/motionSignals';
+import { isNativeAndroidShell, onNativeMediaKey } from '../services/foliaExtensionBridge';
 
 // src/hooks/usePlaybackInteractionBridge.ts
 
@@ -168,6 +169,18 @@ export function usePlaybackInteractionBridge({
         }
     }, [activePlaybackContext, audioRef, audioSrc, isNowPlayingStageActive, isTransitionAudible, pausePlayback, playerState, startPlaybackFromInteraction, stageActiveEntryKind]);
 
+    // 原生媒体键（MediaSessionCompat onPlay/onPause/onPlayPause）：play→播放、pause→暂停、
+    // playpause→切换。next/prev 在 usePlaybackQueueController 订阅（需队列上下文）。
+    useEffect(() => onNativeMediaKey((key) => {
+        if (key === 'play') {
+            startPlaybackFromInteraction();
+        } else if (key === 'pause') {
+            pausePlayback();
+        } else if (key === 'playpause') {
+            togglePlay();
+        }
+    }), [pausePlayback, startPlaybackFromInteraction, togglePlay]);
+
     const toggleLoop = useCallback((event?: React.MouseEvent) => {
         event?.stopPropagation();
         if (isNowPlayingStageActive) {
@@ -207,6 +220,25 @@ export function usePlaybackInteractionBridge({
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (isTextEntryTarget(event.target)) {
+                return;
+            }
+
+            // 原生安卓 GeckoView 壳：物理键盘基本不存在；只保留上/下一曲（Ctrl+←/→，兼容外接键盘），
+            // 其余 PC 快捷键（空格暂停、方向键快进/快退、Escape、调试叠加层等）一律不注册。
+            // 媒体键（方向盘/线控）走 onNativeMediaKey 事件通道，不经键盘事件。
+            if (isNativeAndroidShell()) {
+                const code = effectiveKeyCode(event);
+                if (code === 'ArrowLeft' && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+                    if (currentSong && !isNowPlayingStageActive) {
+                        event.preventDefault();
+                        handlePrevTrack();
+                    }
+                } else if (code === 'ArrowRight' && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+                    if (currentSong && !isNowPlayingStageActive) {
+                        event.preventDefault();
+                        void handleNextTrack();
+                    }
+                }
                 return;
             }
 

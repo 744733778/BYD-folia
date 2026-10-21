@@ -50,8 +50,8 @@ interface DesktopGrid3DSurfaceProps {
     /** 网格 suite 声明的首页动作（交给 GridMap 的目录 surface 取交集）。 */
     declaredHomeActions?: LibraryDeclaredActions;
     batchConfig?: GridMapBatchConfig;
-    ponderControls?: 'local-grid-controls';
-    gridMapPonderScope?: 'local-grid-map-page';
+    /** 透传给 GridMap 的 E2E 页面范围标记。 */
+    gridMapPageScope?: 'grid-page' | 'local-grid-map-page';
 }
 
 export const DesktopGrid3DSurface: React.FC<DesktopGrid3DSurfaceProps> = ({
@@ -74,8 +74,7 @@ export const DesktopGrid3DSurface: React.FC<DesktopGrid3DSurfaceProps> = ({
     directoryKey = DEFAULT_DIRECTORY_SESSION_ID,
     declaredHomeActions,
     batchConfig,
-    ponderControls,
-    gridMapPonderScope,
+    gridMapPageScope,
 }) => {
     // GridMap 就是网格里「打开着的目录」（core 的目录会话 store 记着打开的是哪个，见 useLibraryDirectorySessionStore）：
     // 打开地图 = openDirectory，关掉地图 = closeDirectory（退场动画结束之后：地图还在淡出，筛选结果不能先跳回全部；
@@ -141,7 +140,7 @@ export const DesktopGrid3DSurface: React.FC<DesktopGrid3DSurfaceProps> = ({
     };
 
     return (
-        <div data-ponder-page-scope="grid-page" className="w-full h-full min-h-0 flex flex-col justify-center relative">
+        <div className="w-full h-full min-h-0 flex flex-col justify-center relative">
             {/* One row under the home header, on the header's own max-w-7xl grid so it shares its
                 centre line: the second-level capsule (the map of all cards, then the collection
                 types) sits right under the header's view capsule, the library actions on the right
@@ -158,14 +157,13 @@ export const DesktopGrid3DSurface: React.FC<DesktopGrid3DSurfaceProps> = ({
                                 onOpenMap={isLoading ? undefined : openGridMap}
                                 mapLabel={mapButtonLabel}
                                 mapIcon={<MapIcon size={13} />}
-                                ponderId={ponderControls}
                             />
                         )}
                     </div>
 
                     <div className="flex min-w-0 justify-end">
                         {actions.length > 0 && (
-                            <div data-ponder={ponderControls} className="pointer-events-auto flex flex-wrap items-center justify-end gap-2">
+                            <div  className="pointer-events-auto flex flex-wrap items-center justify-end gap-2">
                                 {actions.map(action => (
                                     <button
                                         key={action.id}
@@ -233,7 +231,7 @@ export const DesktopGrid3DSurface: React.FC<DesktopGrid3DSurfaceProps> = ({
                         hiddenIds={hiddenPlaylistIds}
                         onTogglePlaylistHidden={togglePlaylistHidden}
                         batchConfig={batchConfig}
-                        ponderPageScope={gridMapPonderScope}
+                        pageScope={gridMapPageScope}
                     />
                 )}
             </AnimatePresence>

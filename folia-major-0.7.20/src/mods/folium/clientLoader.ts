@@ -40,7 +40,7 @@ const loadInternals = () => {
     return internalsPromise;
 };
 
-// Experimental surfaces (Omni providers/hooks, Ponder targets): main window only, on first opt-in.
+// Experimental surfaces (Omni providers/hooks): main window only, on first opt-in.
 const loadExperimental = () => {
     experimentalPromise ??= Promise.all([import('./experimental'), loadApi()]).then(([module, api]) => {
         api.addFoliumTeardownRegistries(module.EXPERIMENTAL_REGISTRIES);

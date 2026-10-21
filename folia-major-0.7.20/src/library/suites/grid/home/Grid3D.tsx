@@ -156,9 +156,8 @@ export const Grid3D: React.FC<Grid3DProps> = (props) => {
         navidromeEnabled,
     });
     const { tab: homeViewTab, setTab: setHomeViewTab, isOnlineTab, online, tabs: homeTabs } = homeSources;
-    // 安卓移植版：在视图层隐藏「电台」一级页签（resolveHomeTabs / HomeViewTab 等模型与类型保留不动），
-    // 原页签位由 tab 栏里的「设置」按钮取代。键盘循环、表面注册、渲染三处统一用过滤后的列表。
-    const visibleHomeTabs = homeTabs.filter(tab => tab.key !== 'radio');
+    // Route A（保留 folia 原味）：电台页签已恢复——页签栏、键盘循环、表面注册、渲染统一用全量 homeTabs。
+    const visibleHomeTabs = homeTabs;
     const activeProviderId = online.providerId;
     const activeProviderSummary = online.provider;
     const activeProviderLabel = online.providerLabel;
@@ -301,7 +300,7 @@ export const Grid3D: React.FC<Grid3DProps> = (props) => {
     return (
         <div
             ref={gridRootRef}
-            data-ponder-page-scope="grid-page"
+
             className={`relative w-full h-full flex flex-col font-sans overflow-hidden pointer-events-auto ${bottomPadding}`}
             style={{ backgroundColor: 'var(--bg-color)' }}
         >

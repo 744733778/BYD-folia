@@ -283,12 +283,11 @@ const BravaisCollection: React.FC<LibraryCollectionSurfaceProps> = ({
     }), [callbacks, entries, focus.initialKey, isActive, items, popTo, nowPlayingKey, queuedKeys, seam, sessionKey, view.isFilterActive, wall]);
     useBravaisLayerRegistration('top', layer, isPresent);
 
-    // 不可见的锚点：铺满但不接指针，画面全在 stage 里。Ponder 的页面标记（bravais-wall）要有尺寸才参与解析。
     return (
         <div
             data-library-renderer="bravais"
             data-library-surface="collection"
-            data-ponder-page-scope="bravais-wall"
+            data-page-scope="bravais-wall"
             data-bravais-layer={sessionKey}
             data-bravais-mode={view.isFilterActive ? 'finite' : 'infinite'}
             aria-hidden

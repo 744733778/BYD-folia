@@ -28,11 +28,7 @@ import PlaybackSettingsSubview from './settings/PlaybackSettingsSubview';
 import InteractionSettingsSubview from './settings/InteractionSettingsSubview';
 import StorageSettingsSection from './settings/StorageSettingsSection';
 import { AiHelpPromptModal } from './AiHelpPromptModal';
-import SettingsHelpActions from './SettingsHelpActions';
-import { openPonderNavigation } from '../../services/ponder/pagePonderTarget';
 import ReleaseNotesDialog from './ReleaseNotesDialog';
-import { importFolder } from '../../services/localMusicService';
-import { setStatusMessage } from '../../stores/useStatusMessageStore';
 import { JoinCommunityButton } from '../shared/JoinCommunityButton';
 import { copyTextToClipboard } from '../../utils/clipboard';
 import { BUILD_KIND_TAGS, getBuildKind } from '../../utils/buildProvenance';
@@ -59,7 +55,7 @@ import type { ThemeCacheSongKey } from '../../services/themeCache';
 import type { ThemeGenerationSource } from '../../services/themePreferences';
 import { isMacPlatform as isMac } from '../../utils/platform';
 import { HELP_TAB_PRIMARY_SHORTCUTS } from './userGuideContent';
-import { openCurrentPagePonder } from '../../services/ponder/pagePonderTarget';
+
 import { selectVisualizerSettingsSnapshot, useVisualizerSettingsStore } from '../../stores/useVisualizerSettingsStore';
 import { selectVisualizerAssetSnapshot, useVisualizerAssetStore } from '../../stores/useVisualizerAssetStore';
 import { selectLyricSettingsSnapshot, useLyricSettingsStore } from '../../stores/useLyricSettingsStore';
@@ -1363,7 +1359,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             exit={{ opacity: 0 }}
             transition={shellTransition}
             data-folia-keyboard-window="true"
-            data-ponder-page-scope={activeTab === 'help' ? 'help-page' : 'settings-page'}
+            data-page-scope="settings-page"
             className="fixed inset-0 z-[100] flex items-center justify-center px-4 py-8 sm:px-5 sm:py-12"
             style={{ backgroundColor: overlayBackground }}
             onMouseDown={handleOverlayMouseDown}
@@ -1446,17 +1442,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                 transition={shellTransition}
                                 className="space-y-6 select-none flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-2 pb-4"
                             >
-                                <SettingsHelpActions
-                                    onImportFolder={() => {
-                                        setStatusMessage({ type: 'info', text: t('localMusic.importing') });
-                                        void importFolder().then(songs => {
-                                            setStatusMessage({ type: 'info', text: `${t('localMusic.importFolder')}：${songs.length} 首已导入` });
-                                        }).catch(error => {
-                                            setStatusMessage({ type: 'error', text: error instanceof Error ? error.message : String(error) });
-                                        });
-                                    }}
-                                    onOpenPonder={openPonderNavigation}
-                                />
+                                {/* 帮助页只留导航说明：原来的「导入文件夹 / 思索」两张卡已移除
+                                    （曲库自动扫描公共目录，思索入口在别处）。 */}
 
                                 {/* Navigation - REMOVED requested items */}
                                 {/* 

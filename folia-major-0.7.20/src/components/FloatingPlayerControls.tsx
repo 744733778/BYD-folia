@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Play, Pause } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 import { MotionValue } from 'framer-motion';
 import ProgressBar from './ProgressBar';
 import { PlayerState, LyricData, Theme } from '../types';
@@ -365,7 +365,7 @@ const FloatingPlayerControls: React.FC<FloatingPlayerControlsProps> = ({
                         // 用原生 pointer 事件而不是 framer-motion 的 drag：位移已经由 playerBottomBarLiveOffset
                         // 经外层 lift 表达，再让 drag 往这个节点写一份 y 会叠加成两倍位移；
                         // 而且 dragConstraints 依赖的起始值放在 ref 里不会触发重渲染，读到的会是上一帧的。
-                        data-ponder="player-bar"
+
                         onPointerDown={handlePositionDragStart}
                         onPointerMove={handlePositionDragMove}
                         onPointerUp={handlePositionDragEnd}
@@ -475,6 +475,51 @@ interface ExpandedViewProps {
     slotContext: PlayerControlSlotContext;
 }
 
+/**
+ * 播放键两侧的切歌键。
+ *
+ * 之前切歌只有一个入口：把指针移到歌名上，两侧才浮出箭头（TrackTitleNavigator）。
+ * 那是桌面思路——车机是触屏、没有指针悬停，那对箭头永远不出现，于是切歌只剩方向盘热键。
+ *
+ * 样式上刻意给一个实心圆底 + 细边：胶囊底下是模糊封面，只画一根浅色描边图标的话，
+ * 遇到浅色封面就直接消失了（车机上反馈过"看不到按钮"）。这里也不靠 hover 变亮——
+ * 触屏没有 hover，常态就必须是最终形态。
+ */
+const SkipButton: React.FC<{
+    direction: 'prev' | 'next';
+    disabled: boolean;
+    primaryColor: string;
+    isDaylight?: boolean;
+    onPress: () => void;
+    label: string;
+}> = ({ direction, disabled, primaryColor, isDaylight, onPress, label }) => {
+    const Icon = direction === 'prev' ? SkipBack : SkipForward;
+    return (
+        <button
+            type="button"
+            onClick={(e) => {
+                e.stopPropagation();
+                if (disabled) {
+                    return;
+                }
+                onPress();
+            }}
+            disabled={disabled}
+            title={label}
+            aria-label={label}
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors ${disabled
+                ? 'cursor-not-allowed border-transparent opacity-30'
+                : isDaylight
+                    ? 'border-black/10 bg-black/[0.06] active:bg-black/[0.14]'
+                    : 'border-white/15 bg-white/10 active:bg-white/20'
+                }`}
+            style={{ color: primaryColor }}
+        >
+            <Icon size={22} />
+        </button>
+    );
+};
+
 const ExpandedView: React.FC<ExpandedViewProps> = ({
     currentSong,
     playerState,
@@ -524,26 +569,50 @@ const ExpandedView: React.FC<ExpandedViewProps> = ({
                 )}
             </div>
 
-            {/* Row 3: Loop Button, Play Button, Lyrics Button */}
-            <button
-                onClick={(e) => {
-                    e.stopPropagation();
-                    onTogglePlay();
-                }}
-                disabled={!canTogglePlay || controlsDisabled}
-                className={`col-start-2 row-start-2 flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-none bg-(--text-primary) text-black shadow-lg transition-transform sm:col-start-1 sm:row-start-1 sm:row-span-2 ${controlsDisabled ? 'cursor-not-allowed opacity-45' : 'hover:scale-105'}`}
-                style={{ backgroundColor: primaryColor, color: 'var(--bg-color)' }}
-            >
-                {playerState === PlayerState.PLAYING ? (
-                    <Pause size={20} fill="currentColor" />
-                ) : (
-                    <Play size={20} fill="currentColor" className="ml-1" />
+            {/* Row 2: 上一曲 / 播放暂停 / 下一曲。三键并排，切歌不必先悬停标题。 */}
+            <div className="col-start-2 row-start-2 flex items-center justify-center gap-1.5 sm:col-start-1 sm:row-start-1 sm:row-span-2 sm:justify-start">
+                {trackNavigation && (
+                    <SkipButton
+                        direction="prev"
+                        // 队列第一首时 canPrev 为 false，但把按钮直接禁掉在车机上就是"点了没反应"。
+                        // 这时按通行做法退回本曲开头——用户按了总要有东西发生。
+                        disabled={controlsDisabled}
+                        primaryColor={primaryColor}
+                        isDaylight={isDaylight}
+                        onPress={trackNavigation.canPrev ? trackNavigation.onPrev : () => onSeek(0)}
+                        label={trackNavigation.prevLabel}
+                    />
                 )}
-            </button>
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onTogglePlay();
+                    }}
+                    disabled={!canTogglePlay || controlsDisabled}
+                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-none bg-(--text-primary) text-black shadow-lg transition-transform ${controlsDisabled ? 'cursor-not-allowed opacity-45' : 'hover:scale-105'}`}
+                    style={{ backgroundColor: primaryColor, color: 'var(--bg-color)' }}
+                >
+                    {playerState === PlayerState.PLAYING ? (
+                        <Pause size={20} fill="currentColor" />
+                    ) : (
+                        <Play size={20} fill="currentColor" className="ml-1" />
+                    )}
+                </button>
+                {trackNavigation && (
+                    <SkipButton
+                        direction="next"
+                        disabled={!trackNavigation.canNext || controlsDisabled}
+                        primaryColor={primaryColor}
+                        isDaylight={isDaylight}
+                        onPress={trackNavigation.onNext}
+                        label={trackNavigation.nextLabel}
+                    />
+                )}
+            </div>
 
             {/* 两个可自定义槽位。默认仍是循环模式 + 歌词时间轴，和改动前一致。 */}
             <div
-                data-ponder-slots
+
                 className="contents sm:col-start-3 sm:row-start-1 sm:row-span-2 sm:flex sm:items-center sm:gap-1"
             >
                 <PlayerControlSlotButton

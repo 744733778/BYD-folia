@@ -9,7 +9,7 @@ import { applyAudioEqualizerSettings } from '../services/audioEqualizerGraph';
 import { type AudioEffectChain } from '../services/audioEffects/effectChain';
 import { buildPlaybackGraph } from '../services/playbackGraph';
 import { cachePlayedTrackAssets } from '../services/playedTrackCache';
-import { registerPlaybackFadeGraph } from '../services/playbackFade';
+import { registerPlaybackFadeGraph, playbackFade } from '../services/playbackFade';
 import { rampGain, type AutomixDeckChain } from '../services/automix/crossfadeGraph';
 import { setStatusMessage as setStatusMsg } from '../stores/useStatusMessageStore';
 import { isPlaybackFailureStatus } from '../services/playbackRecovery/playbackFailurePolicy';
@@ -18,8 +18,16 @@ import { setPlayerState } from '../stores/usePlaybackStore';
 import { useTranslation } from 'react-i18next';
 import { usePlaybackStore } from '../stores/usePlaybackStore';
 import { useAppViewStore } from '../stores/useAppViewStore';
+import { getSystemVolume, getVolumeMode, isNativeAndroidShell, onNativeSystemEvent } from '../services/foliaExtensionBridge';
+import { useNativeVolumeMirrorStore } from '../stores/useNativeVolumeMirrorStore';
 
 // src/hooks/usePlaybackAudioBridge.ts
+
+/** 固定音量车机的应用内音量（写进 gainNode），刻意与 player_volume 分开存。 */
+const SOFT_VOLUME_KEY = 'player_soft_volume';
+const DEFAULT_SOFT_VOLUME = 0.7;
+/** 软音量下限：0 留给显式静音，避免任何脏值把输出钉死成"完全没声音"。 */
+const MIN_SOFT_VOLUME = 0.02;
 
 type UsePlaybackAudioBridgeParams = {
 
@@ -76,6 +84,186 @@ export function usePlaybackAudioBridge({
     const equalizerNodesRef = useRef<BiquadFilterNode[]>([]);
     const effectChainRef = useRef<AudioEffectChain | null>(null);
     const audioEqualizerSettings = useAudioSettingsStore(state => state.audioEqualizerSettings);
+
+    // 音量完全交给系统媒体音量：网页侧不再做任何音量干预（无轮询、无系统读/写、无增益钉死）。
+    // 这个包装只是让本 hook 的调用点保持形状；原生模式下 web 增益维持 App.syncOutputGain 原始行为。
+    const applyOutputLevel = useCallback((targetVolume: number, smoothing = 0.015) => {
+        syncOutputGain(targetVolume, smoothing);
+    }, [syncOutputGain]);
+
+    // AudioContext 没在跑 ⇒ 一点声音都出不来（声音只从它到 destination），此时写 gainNode
+    // 完全无效。车机冷启动自动续播没有用户手势，内核可能把上下文建在 suspended 上，
+    // 表现就是"进度条在走、完全没声音、怎么调音量都没反应"。所有播放起点都先拉一次。
+    const ensureAudioContextRunning = useCallback(() => {
+        const ctx = audioContextRef.current;
+        if (!ctx || ctx.state === 'running' || ctx.state === 'closed') return;
+        void ctx.resume()
+            .then(() => {
+                // 上下文刚恢复：把当前目标音量重新落一遍，别让旧值留在节点上。
+                syncOutputGain(getTargetPlaybackVolume(), 0);
+            })
+            .catch(() => {
+                // 仍被策略拦住：等下面的一次性手势监听兜底。
+            });
+    }, [audioContextRef, getTargetPlaybackVolume, syncOutputGain]);
+
+    // 首个用户手势兜底：上下文确实被钉在 suspended 时，第一次触屏/按键立刻恢复。
+    // 桌面浏览器不注册，避免给正常环境增加监听。
+    useEffect(() => {
+        if (!isNativeAndroidShell()) return;
+        const resume = () => ensureAudioContextRunning();
+        window.addEventListener('pointerdown', resume, true);
+        window.addEventListener('keydown', resume, true);
+        window.addEventListener('touchstart', resume, true);
+        return () => {
+            window.removeEventListener('pointerdown', resume, true);
+            window.removeEventListener('keydown', resume, true);
+            window.removeEventListener('touchstart', resume, true);
+        };
+    }, [ensureAudioContextRunning]);
+
+    // 原生壳：先探测系统音量是否真的可用。
+    //  - 普通机型：系统媒体音量是唯一音量源，这里只把数值镜像给音量条显示，**绝不写 gainNode**
+    //    （旧实现每 600ms 把系统音量写进 gainNode，等于被平方，听起来"音量不跟随/偏小"）。
+    //  - 固定音量机型（DiLink）：AudioManager 空转，系统音量永远满档。此时必须改用应用内软件增益，
+    //    否则就是"总是最大声、怎么调都无效"。
+    useEffect(() => {
+        if (!isNativeAndroidShell()) return;
+        let cancelled = false;
+        let off: (() => void) | null = null;
+        let timer = 0;
+
+        const applyMirror = (v: number | null) => {
+            if (cancelled || v === null || !Number.isFinite(v)) return;
+            useNativeVolumeMirrorStore.getState().setSystemVolumeMirror(Math.min(1, Math.max(0, v)));
+        };
+
+        const startSystemMirror = () => {
+            // 事件驱动：壳层 ContentObserver 一有变化就推 → UI 跟手、零轮询。
+            off = onNativeSystemEvent((method, payload) => {
+                if (method !== 'volume') return;
+                const v = typeof payload === 'number' ? payload : Number.parseFloat(String(payload));
+                applyMirror(Number.isFinite(v) ? v : null);
+            });
+            void getSystemVolume().then(applyMirror);
+            // 兜底：极少数 ROM 不派发 Settings 变更，低频拉一次即可（30s，成本可忽略）。
+            timer = window.setInterval(() => { void getSystemVolume().then(applyMirror); }, 30000);
+        };
+
+        void getVolumeMode().then(mode => {
+            if (cancelled) return;
+            const fixed = mode === 'fixed';
+            useNativeVolumeMirrorStore.getState().setFixedVolume(fixed);
+            if (!fixed) {
+                startSystemMirror();
+                return;
+            }
+            // 固定音量：把持久化的应用内音量装回 store（原生壳 readStoredVolume 恒 1），
+            // 再立刻写进 gainNode —— 车机一启动就是合适的响度，而不是满功率。
+            //
+            // 独立键 player_soft_volume：绝不复用 player_volume。旧版本在车机上可能把
+            // player_volume 写成 0（那次是拖到静音试的），拿它当软音量初值就是"一启动全静音，
+            // 而且怎么调都没声"。这里 0 也视为无效值，退回默认 0.7。
+            const parsed = Number.parseFloat(localStorage.getItem(SOFT_VOLUME_KEY) ?? '');
+            const level = Number.isFinite(parsed) && parsed > 0
+                ? Math.min(1, Math.max(MIN_SOFT_VOLUME, parsed))
+                : DEFAULT_SOFT_VOLUME;
+            useAudioSettingsStore.getState().handleSetVolume(level);
+            applyOutputLevel(level, 0);
+            // 冷启动没有用户手势，AudioContext 可能还没跑起来：先把上下文拉起来再确认增益。
+            ensureAudioContextRunning();
+        });
+
+        return () => {
+            cancelled = true;
+            off?.();
+            if (timer) window.clearInterval(timer);
+        };
+    }, [applyOutputLevel, ensureAudioContextRunning]);
+
+    // 应用内音量 → 输出层。原生壳只要不是"系统音量确认可用"（fixedVolume === false），
+    // 这一层就是唯一音量闸：DiLink 这类车机 isVolumeFixed 可能报 false，但 STREAM_MUSIC 写进去
+    // 根本没人执行，所以只要探测没过就必须由网页这层承担，宁可小声也不能满功率。
+    const fixedVolume = useNativeVolumeMirrorStore(state => state.fixedVolume);
+    const systemVolume = useNativeVolumeMirrorStore(state => state.systemVolume);
+    const appVolume = useAudioSettingsStore(state => state.volume);
+    const appMuted = useAudioSettingsStore(state => state.isMuted);
+    // 与 App.syncOutputGain 里的 systemGoverns 保持完全一致：探测说"可调"还不够，系统音量
+    // 必须真的低于满档，才承认系统那层在缩放。DiLink 的探测会假通过，判据不一致的话
+    // 这里会提前 return，滑杆和启动初值都落不到增益上（改了等于没改）。
+    const systemGovernsNow = isNativeAndroidShell()
+        && fixedVolume === false
+        && systemVolume !== null
+        && systemVolume < 0.999;
+    useEffect(() => {
+        if (!isNativeAndroidShell() || systemGovernsNow) return;
+        // 静音之外永远给一个可听见的下限：固定音量车机没有第二道音量闸，
+        // 增益一旦是 0 就彻底没声音，用户连"是不是在放"都判断不了。
+        const level = appMuted ? 0 : Math.max(MIN_SOFT_VOLUME, appVolume);
+        applyOutputLevel(level, 0.02);
+        // 只记用户真正调过的音量；0 不记，免得下次启动读到 0 又变成静音。
+        if (!appMuted && appVolume > 0) {
+            try {
+                localStorage.setItem(SOFT_VOLUME_KEY, String(appVolume));
+            } catch {
+                // 存储不可用（隐私模式）时忽略：下次启动退回默认值。
+            }
+        }
+        ensureAudioContextRunning();
+    }, [systemGovernsNow, systemVolume, fixedVolume, appVolume, appMuted, applyOutputLevel, ensureAudioContextRunning]);
+
+    // 输出自检（原生壳）：element 明明在播，但音频图出口一点能量都没有 ⇒ 静音发生在
+    // WebAudio 这一层（上下文被挂起、某个 gain 停在 0、淡化节点没回来）。固定音量车机没有
+    // 第二道音量闸，一旦这样就是"完全没声音、怎么调都没用"，所以这里自愈两档：
+    //   ① 归位上下文与淡化节点，并把主增益抬到可听见；
+    //   ② 仍然死寂 → 主增益拉到满档（等同退回旧的"系统音量"行为），宁可大声也不能没声。
+    // 只有图存在（analyser 存在）时才跑；没有图说明音频不经 WebAudio，那种情况一定有声音。
+    const silentTicksRef = useRef(0);
+    const playerState = usePlaybackStore(state => state.playerState);
+    useEffect(() => {
+        if (!isNativeAndroidShell()) return;
+        if (playerState !== PlayerState.PLAYING) {
+            silentTicksRef.current = 0;
+            return;
+        }
+        const timer = window.setInterval(() => {
+            const el = audioRef.current;
+            const analyser = analyserRef.current;
+            if (!el || el.paused || el.ended || !analyser) {
+                silentTicksRef.current = 0;
+                return;
+            }
+            const buffer = new Uint8Array(analyser.fftSize);
+            analyser.getByteTimeDomainData(buffer);
+            let peak = 0;
+            for (let i = 0; i < buffer.length; i += 1) {
+                const deviation = Math.abs(buffer[i] - 128);
+                if (deviation > peak) peak = deviation;
+            }
+            if (peak > 0) {
+                silentTicksRef.current = 0;
+                return;
+            }
+            silentTicksRef.current += 1;
+            // 上下文没在跑：所有增益都写在空气上，先拉起来（要用户手势才可能成功，
+            // 所以每个 tick 都试一次——用户一碰屏幕，下一次就会恢复）。
+            const ctx = audioContextRef.current;
+            if (!ctx || ctx.state !== 'running') {
+                ensureAudioContextRunning();
+                return;
+            }
+            if (silentTicksRef.current === 1) {
+                // 只做"归位"：把淡化节点收回 1、把上下文拉起来、把用户的目标音量重新写一遍。
+                // 这里曾经还有两档"兜底拉满"（element.volume=1、gain=1），在车机上正好是灾难：
+                // analyser 读不到能量并不等于真的没声音——元素没接进 WebAudio 图时它永远是 0，
+                // 而这两档会把音量硬钉在 100%，用户再拖滑杆也拉不回来。
+                playbackFade.cancel();
+                ensureAudioContextRunning();
+                syncOutputGain(getTargetPlaybackVolume(), 0);
+            }
+        }, 2000);
+        return () => window.clearInterval(timer);
+    }, [analyserRef, applyOutputLevel, audioRef, ensureAudioContextRunning, getTargetPlaybackVolume, playerState, syncOutputGain]);
 
     // Recalculates source-specific gain after the audio graph or playback settings become ready.
     const applyReplayGain = useCallback(() => {
@@ -162,11 +350,13 @@ export function usePlaybackAudioBridge({
                 console.warn('[AudioContext] Deck setup incomplete, automix will stay idle');
             }
             applyReplayGain();
-            syncOutputGain(getTargetPlaybackVolume(), 0);
+            applyOutputLevel(getTargetPlaybackVolume(), 0);
+            // 新建的上下文可能停在 suspended（无手势冷启动），声音会彻底没有。
+            ensureAudioContextRunning();
         } catch (error) {
             console.error('Audio Context Setup Failed:', error);
         }
-    }, [analyserRef, applyReplayGain, audioContextRef, audioEqualizerSettings, audioRef, connectDecks, gainNodeRef, getTargetPlaybackVolume, syncOutputGain]);
+    }, [analyserRef, applyOutputLevel, applyReplayGain, audioContextRef, audioEqualizerSettings, audioRef, connectDecks, ensureAudioContextRunning, gainNodeRef, getTargetPlaybackVolume]);
 
     /**
      * Writes a fully-played track's audio and cover into the media cache.
@@ -202,9 +392,9 @@ export function usePlaybackAudioBridge({
 
     useEffect(() => {
         if (audioRef.current) {
-            syncOutputGain(getTargetPlaybackVolume(), 0.015);
+            applyOutputLevel(getTargetPlaybackVolume(), 0.015);
         }
-    }, [audioRef, getTargetPlaybackVolume, syncOutputGain]);
+    }, [audioRef, applyOutputLevel, getTargetPlaybackVolume]);
 
     useEffect(() => {
         localStorage.setItem('local_replaygain_mode', replayGainMode);
@@ -294,13 +484,18 @@ export function usePlaybackAudioBridge({
                     return;
                 }
 
-                syncOutputGain(getTargetPlaybackVolume(), 0);
+                applyOutputLevel(getTargetPlaybackVolume(), 0);
                 const playPromise = audioRef.current.play();
                 if (playPromise !== undefined) {
                     playPromise
                         .then(() => {
                             setPlayerState(PlayerState.PLAYING);
                             setupAudioAnalyzer();
+                            // 真的开始放了：把传输淡化节点归位（自动续播没走 transport 的
+                            // prepareFadeIn/runFadeIn 配对时，它可能停在上一次淡出的 0 上，
+                            // 那会让"怎么调音量都没声音"），并确认上下文在跑。
+                            playbackFade.cancel();
+                            ensureAudioContextRunning();
                             // Playback has really started. The transport hands a refreshed source (its TTL
                             // refresh, or the recovery after a rejected play()) to this effect to start, so a
                             // leftover retry / skip failure toast, which has no close control, is cleared here
@@ -327,12 +522,53 @@ export function usePlaybackAudioBridge({
                             if (error.name === 'NotAllowedError') {
                                 setStatusMsg({ type: 'info', text: t('status.clickToPlay') });
                                 setPlayerState(PlayerState.PAUSED);
+
+                                // 车机/原生壳的 AUTOPLAY 授权是异步落地的：首次 play() 常常先被
+                                // 拒一次，权限随后才生效。先退避重试几次，让"启动即续播"自己开始；
+                                // 真被策略拦死，再退回"首个用户手势补播"。
+                                const failAudio = audioRef.current;
+                                let tries = 0;
+                                const retryWhenAllowed = () => {
+                                    const el = audioRef.current;
+                                    // 已经换歌/已在放/源出错：这个意图过期了，交给新流程。
+                                    if (!el || el !== failAudio || !el.paused || el.ended || el.error) return;
+                                    if (tries++ >= 3) {
+                                        const retryOnGesture = () => {
+                                            window.removeEventListener('pointerdown', retryOnGesture);
+                                            window.removeEventListener('keydown', retryOnGesture);
+                                            const a = audioRef.current;
+                                            if (a && a.paused && !a.ended && !a.error) {
+                                                a.play()
+                                                    .then(() => {
+                                                        setPlayerState(PlayerState.PLAYING);
+                                                        setupAudioAnalyzer();
+                                                        playbackFade.cancel();
+                                                        ensureAudioContextRunning();
+                                                    })
+                                                    .catch(() => { /* 仍失败则保持暂停，走正常播放键 */ });
+                                            }
+                                        };
+                                        window.addEventListener('pointerdown', retryOnGesture);
+                                        window.addEventListener('keydown', retryOnGesture);
+                                        return;
+                                    }
+                                    el.play()
+                                        .then(() => {
+                                            setPlayerState(PlayerState.PLAYING);
+                                            setupAudioAnalyzer();
+                                            playbackFade.cancel();
+                                            ensureAudioContextRunning();
+                                            setStatusMsg(prev => (isPlaybackFailureStatus(prev) ? null : prev));
+                                        })
+                                        .catch(() => window.setTimeout(retryWhenAllowed, 250 * 2 ** tries));
+                                };
+                                window.setTimeout(retryWhenAllowed, 250);
                             }
                         });
                 }
             }
         }
-    }, [audioRef, audioSrc, getTargetPlaybackVolume, isAutoplayHeld, isLyricsLoading, setPlayerState, setStatusMsg, setupAudioAnalyzer, shouldAutoPlayRef, suppressAutoplayRef, syncOutputGain, t]);
+    }, [applyOutputLevel, audioRef, audioSrc, ensureAudioContextRunning, getTargetPlaybackVolume, isAutoplayHeld, isLyricsLoading, setPlayerState, setStatusMsg, setupAudioAnalyzer, shouldAutoPlayRef, suppressAutoplayRef, t]);
 
     // Tells this bridge that the active deck ALREADY holds `src` and is sounding it, so the next time
     // `audioSrc` settles on that value the reload effect above treats it as a no-op instead of calling

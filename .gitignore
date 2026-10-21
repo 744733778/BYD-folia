@@ -1,13 +1,23 @@
 # 构建产物 / 大目录（仓库不保存）
 node_modules/
 dist/
+dist-android/
+dist-androidN/
 build/
 .gradle/
 .kotlin/
+.vite/
+coverage/
 *.log
 build_log*.txt
+*.tsbuildinfo
 app/build/
 app/src/main/assets/folia/
+
+# 本机配置与产物（含机器特定 SDK 路径，禁入仓库）
+local.properties
+*.apk
+*.keystore
 
 # 系统文件
 .DS_Store

@@ -1330,6 +1330,11 @@ export interface LocalSong {
   hasLocalTranslationLyrics?: boolean;
   localTranslationLyricsContent?: string;
   localTranslationLyricsOrigin?: LocalLyricsOrigin;
+  /** 原生源侧car歌词相对路径：导入不读字节，播放时按需 readNativeFile → decodeLyricFileBytes 填回 localLyricsContent。 */
+  localSidecarLyricPath?: string;
+  localTranslationSidecarLyricPath?: string;
+  /** 原生 SAF contentUri 经 LocalHttpServer /cover 同源出图的封面 URL；存在时优先于 localCoverAssetId。 */
+  nativeCoverUrl?: string;
 
   // Embedded Lyrics (from file tags: ID3 USLT, Vorbis LYRICS, etc.)
   hasEmbeddedLyrics?: boolean;

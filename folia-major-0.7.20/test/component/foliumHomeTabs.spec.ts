@@ -70,7 +70,7 @@ for (const suite of ['grid', 'bravais'] as const) {
         await expect.poll(() => page.evaluate(() => window.__homeProbe?.ready() ?? false)).toBe(true);
         await page.evaluate(value => window.__homeProbe!.setSuite(value), suite);
         await registerPage(page);
-        const nativeRoot = suite === 'grid' ? page.locator('[data-ponder-page-scope="grid-page"]') : page.locator('[data-bravais-seam]');
+        const nativeRoot = suite === 'grid' ? page.locator('[data-page-scope="grid-page"]') : page.locator('[data-bravais-seam]');
         const entry = suite === 'grid' ? nativeRoot.getByRole('button', { name: 'Home Messages', exact: true })
             : nativeRoot.locator('[data-bravais-tab="home-test:messages"]');
         await entry.click();
@@ -129,7 +129,7 @@ test('Grid Tab and Shift+Tab reach contributed pages and then leave native cycli
     await mount('homeBehavior');
     await expect.poll(() => page.evaluate(() => window.__homeProbe?.ready() ?? false)).toBe(true);
     await registerPage(page);
-    const nativeRoot = page.locator('[data-ponder-page-scope="grid-page"]');
+    const nativeRoot = page.locator('[data-page-scope="grid-page"]');
     await nativeRoot.getByRole('button', { name: 'Playlists', exact: true }).click();
     const homePage = page.locator('[data-folium-home-page="home-test:messages"]');
     for (let step = 0; step < 8 && await homePage.count() === 0; step++) await page.keyboard.press('Tab');
@@ -150,7 +150,7 @@ test('page focus wraps inside the page through the ShadowRoot and returns to the
     await mount('homeBehavior');
     await expect.poll(() => page.evaluate(() => window.__homeProbe?.ready() ?? false)).toBe(true);
     await registerPage(page);
-    const entry = page.locator('[data-ponder-page-scope="grid-page"]').getByRole('button', { name: 'Home Messages', exact: true });
+    const entry = page.locator('[data-page-scope="grid-page"]').getByRole('button', { name: 'Home Messages', exact: true });
     await entry.click();
     const homePage = page.locator('[data-folium-home-page="home-test:messages"]');
     const back = homePage.getByRole('button', { name: 'Back to library' });

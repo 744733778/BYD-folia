@@ -262,6 +262,31 @@ export function useAutomixDecks({
     }, [activeDeck, currentSong]);
 
     /**
+     * 软件音量：直接写在 deck 元素上的那一层。
+     *
+     * 声音是这两只 `<audio>` 出的。它们一旦接进 WebAudio（createMediaElementSource），
+     * element.volume 按规范就失效了，音量只能由 gainNode 承担；但接不进去的时候——车机上
+     * AudioContext 被内核策略拦掉、或 deck 建链失败——gainNode 是悬空的，唯一还能改变实际
+     * 响度的就只有 element.volume。所以这里按 deck 自己是否已接进图来决定写哪一层，
+     * 两条路径互斥，不会出现"增益乘两次"。
+     *
+     * 换 element（React 重挂）或切到另一只 deck 时都会重落一遍，否则新元素默认 1 就是满音量。
+     */
+    const desiredElementVolumeRef = useRef(1);
+    const applyElementVolume = useCallback((level: number) => {
+        const clamped = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 1;
+        desiredElementVolumeRef.current = clamped;
+        (['A', 'B'] as const).forEach(deck => {
+            const el = elementsRef.current[deck];
+            if (!el) return;
+            // 已接入图：元素音量会被忽略，这里保持 1，避免某些实现里再乘一次。
+            const next = chainsRef.current[deck] ? 1 : clamped;
+            if (Math.abs(el.volume - next) > 0.001) el.volume = next;
+            if (!chainsRef.current[deck] && el.muted) el.muted = false;
+        });
+    }, []);
+
+    /**
      * Asks the main process once, at startup, which weights are on disk.
      *
      * Without this nobody ever asks. `modelsPresent()` starts at all-false by design - it is shown to the
@@ -384,6 +409,8 @@ export function useAutomixDecks({
             getChain: deck => chainsRef.current[deck] ?? null,
             onActiveDeckChange: deck => {
                 audioRef.current = elementsRef.current[deck];
+                // 切到另一只 deck：新元素没经过音量写入就是满音量，这里补一次。
+                applyElementVolume(desiredElementVolumeRef.current);
                 setActiveDeck(deck);
             },
             onTailSrcChange: (src, opts) => {
@@ -442,10 +469,11 @@ export function useAutomixDecks({
             console.warn(`[Automix] deck ${deck} was remounted while it held a source`);
         }
         elementsRef.current[deck] = element;
+        if (element) applyElementVolume(desiredElementVolumeRef.current);
         if (deck === session.getActiveDeck()) {
             audioRef.current = element;
         }
-    }, [audioRef, session]);
+    }, [applyElementVolume, audioRef, session]);
 
     const registerDeckA = useCallback((element: HTMLAudioElement | null) => bindDeck('A', element), [bindDeck]);
     const registerDeckB = useCallback((element: HTMLAudioElement | null) => bindDeck('B', element), [bindDeck]);
@@ -524,8 +552,10 @@ export function useAutomixDecks({
             // track's when this fires.
             element.addEventListener('ended', () => harvestRef.current(deck));
         });
+        // 刚接进图的 deck：element.volume 从此失效，交回 gainNode，元素回到 1 免得叠乘。
+        applyElementVolume(desiredElementVolumeRef.current);
         return Boolean(chainsRef.current.A && chainsRef.current.B);
-    }, []);
+    }, [applyElementVolume]);
 
     /**
      * One console line per song, whichever way the decision went.
@@ -823,6 +853,7 @@ export function useAutomixDecks({
         clearFailedWarmSource,
         getDisplayElement,
         connectDecks,
+        applyElementVolume,
         getActiveChain,
         checkTransitionPoint,
         handleActiveDeckPlaying,

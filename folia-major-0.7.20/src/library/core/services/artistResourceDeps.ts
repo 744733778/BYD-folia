@@ -25,7 +25,7 @@ export const createArtistResourceDeps = (t: ArtistResourceDeps['t']): ArtistReso
     },
     local: {
         resolveCoverUrl: (song) => {
-            const localCoverUrl = getLocalCoverAssetUrl(song.localCoverAssetId, 512);
+            const localCoverUrl = song.nativeCoverUrl || getLocalCoverAssetUrl(song.localCoverAssetId, 512);
             return (song.useOnlineCover ? (song.onlineMetadata?.coverUrl || localCoverUrl) : localCoverUrl) || undefined;
         },
         toTracks: (songs, catalog) => buildLocalQueue(songs, undefined, catalog),

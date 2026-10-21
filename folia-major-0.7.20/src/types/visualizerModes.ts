@@ -21,6 +21,7 @@ export const BUILTIN_VISUALIZER_MODES = [
     'fume',
     'lumiere',
     'monet',
+    'off',
     'partita',
     'pendolo',
     'sonnet',
@@ -34,12 +35,16 @@ export const BUILTIN_VISUALIZER_BACKGROUND_MODES = [
     'latent',
     'monet',
     'nomand',
+    'none',
     'sora',
     'url',
 ] as const;
 
-export const DEFAULT_VISUALIZER_MODE: VisualizerMode = 'classic';
-export const DEFAULT_VISUALIZER_BACKGROUND_MODE: VisualizerBackgroundMode = 'latent';
+// 首次启动默认：文字=off（纯 DOM 逐字高亮，零粒子），背景=none（纯黑，零着色器）。
+// 目的：初次启动降低负载。车机 Gecko 壳每次从随机端口 origin 加载，localStorage 不跨启动持久，
+// 旧 mode 不会覆盖默认，无需迁移重置；桌面/开发环境 localStorage 持久但不影响车机默认。
+export const DEFAULT_VISUALIZER_MODE: VisualizerMode = 'off';
+export const DEFAULT_VISUALIZER_BACKGROUND_MODE: VisualizerBackgroundMode = 'none';
 
 const VISUALIZER_MODE_SET: ReadonlySet<string> = new Set(BUILTIN_VISUALIZER_MODES);
 const VISUALIZER_BACKGROUND_MODE_SET: ReadonlySet<string> = new Set(BUILTIN_VISUALIZER_BACKGROUND_MODES);

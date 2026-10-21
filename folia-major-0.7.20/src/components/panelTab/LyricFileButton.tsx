@@ -77,7 +77,7 @@ const LyricFileButton: React.FC<LyricFileButtonProps> = ({ buttonClassName, isDa
         <>
             <button
                 type="button"
-                data-ponder-panel-source-lyrics-file
+
                 onClick={() => setIsOpen(true)}
                 className={buttonClassName}
                 title={t('lyricFile.button')}

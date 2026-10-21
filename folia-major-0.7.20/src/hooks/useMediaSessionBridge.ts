@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import type { RefObject } from 'react';
 import { PlayerState } from '../types';
 import type { SongResult } from '../types';
+import { onNativeMediaKey } from '../services/foliaExtensionBridge';
 import { getSongAlbumLabel, getSongArtistLabel, getSongCoverUrl } from '../services/onlineMusic/songMetadata';
 import {
     getSupportedMediaSessionArtworkUrl,
@@ -32,6 +33,8 @@ type UseMediaSessionBridgeOptions = {
     mediaSessionPauseRef: RefObject<() => void>;
     mediaSessionPrevRef: RefObject<() => void>;
     mediaSessionNextRef: RefObject<() => Promise<void> | void>;
+    /** seek 入口（秒）；原生壳层 method 'seek' 复用同一函数，防两套 seek 漂移。 */
+    mediaSessionSeekRef: RefObject<((timeSec: number) => void) | null>;
     isNowPlayingControlDisabledRef: RefObject<boolean>;
 };
 
@@ -48,6 +51,7 @@ export const useMediaSessionBridge = ({
     mediaSessionPauseRef,
     mediaSessionPrevRef,
     mediaSessionNextRef,
+    mediaSessionSeekRef,
     isNowPlayingControlDisabledRef,
 }: UseMediaSessionBridgeOptions) => {
     useEffect(() => {
@@ -97,14 +101,26 @@ export const useMediaSessionBridge = ({
             }
             void mediaSessionNextRef.current();
         });
+        // 车机/蓝牙线控进度条拖动 → seek。GeckoView 是否把 W3C MediaSession seekto 桥到系统
+        // MediaSessionCompat.onSeekTo 未实测；不可达时壳层走 method 'seek' 原生下行（同一 seekRef）。
+        setActionHandlerSafely('seekto', (details) => {
+            if (isNowPlayingControlDisabledRef.current) {
+                return;
+            }
+            const target = details.seekTime;
+            if (typeof target === 'number' && Number.isFinite(target) && mediaSessionSeekRef.current) {
+                mediaSessionSeekRef.current(target);
+            }
+        });
 
         return () => {
             setActionHandlerSafely('play', null);
             setActionHandlerSafely('pause', null);
             setActionHandlerSafely('previoustrack', null);
             setActionHandlerSafely('nexttrack', null);
+            setActionHandlerSafely('seekto', null);
         };
-    }, [audioRef, isNowPlayingControlDisabledRef, mediaSessionNextRef, mediaSessionPauseRef, mediaSessionPlayRef, mediaSessionPrevRef]);
+    }, [audioRef, isNowPlayingControlDisabledRef, mediaSessionNextRef, mediaSessionPauseRef, mediaSessionPlayRef, mediaSessionPrevRef, mediaSessionSeekRef]);
 
     useEffect(() => {
         if (!('mediaSession' in navigator)) {
@@ -205,5 +221,57 @@ export const useMediaSessionBridge = ({
         } catch (e) {
             console.warn('[MediaSession] Failed to update playback state', e);
         }
-    }, [currentSong, isNowPlayingStageActive, playerState]);
+
+        // setPositionState 滚动进度（W3C 面板/蓝牙 AVRCP 进度条）；GeckoView 是否桥到系统待车机验证。
+        const pushPosition = () => {
+            const audio = getDisplayAudioElement?.() ?? audioRef.current;
+            if (!audio || !Number.isFinite(audio.duration) || !Number.isFinite(audio.currentTime)) {
+                return;
+            }
+            try {
+                navigator.mediaSession.setPositionState({
+                    duration: audio.duration,
+                    position: Math.min(audio.currentTime, audio.duration),
+                    playbackRate: audio.playbackRate || 1,
+                });
+            } catch {
+                // 忽略：老浏览器/GeckoView 不支持时静默。
+            }
+        };
+        if (playerState === PlayerState.PLAYING && !isNowPlayingStageActive && currentSong) {
+            pushPosition();
+            const timer = window.setInterval(pushPosition, 1000);
+            return () => window.clearInterval(timer);
+        }
+        return undefined;
+    }, [audioRef, currentSong, getDisplayAudioElement, isNowPlayingStageActive, playerState]);
+
+    // 原生壳物理媒体键（方向盘/车机面板/蓝牙线控）。壳层把 KeyEvent / MediaSession 回调统一
+    // 压成 ns='system' method='mediaKey' 推上来，这里分发到与 W3C MediaSession 完全相同的 ref —
+    // 两套入口一个实现，不会出现"通知栏能暂停、方向盘不能"或"playpause 被当成上一曲"。
+    // 注意这里不看 isNowPlayingControlDisabled：车机方向盘是唯一的物理传输控制，用户停在
+    // 全屏歌词舞台时也必须能切歌/暂停——曾经在这里早退，舞台上按上下曲整组失灵
+    // （事件日志全都到了，歌就是不动，见 2026-10-19 排查）。
+    useEffect(() => onNativeMediaKey((key) => {
+        switch (key) {
+            case 'next':
+                void mediaSessionNextRef.current();
+                break;
+            case 'prev':
+                mediaSessionPrevRef.current();
+                break;
+            case 'play':
+                void mediaSessionPlayRef.current().catch(() => undefined);
+                break;
+            case 'pause':
+                mediaSessionPauseRef.current();
+                break;
+            case 'playpause':
+                if (playerState === PlayerState.PLAYING) mediaSessionPauseRef.current();
+                else void mediaSessionPlayRef.current().catch(() => undefined);
+                break;
+            default:
+                break;
+        }
+    }), [isNowPlayingControlDisabledRef, mediaSessionNextRef, mediaSessionPauseRef, mediaSessionPlayRef, mediaSessionPrevRef, playerState]);
 };

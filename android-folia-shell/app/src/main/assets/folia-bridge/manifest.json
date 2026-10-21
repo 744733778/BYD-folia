@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "folia-bridge",
-  "version": "1.0",
+  "version": "2.0",
   "description": "Bridge between local web UI and native GeckoView shell.",
   "browser_specific_settings": {
     "gecko": {

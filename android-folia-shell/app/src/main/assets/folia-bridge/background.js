@@ -13,7 +13,29 @@ let port = null;
 // content-side request id -> resolve callback
 const pending = new Map();
 
+/**
+ * 原生推送（无 id，如 system.mediaKey）广播给所有 content script。
+ *
+ * 这里**不能**用 browser.runtime.sendMessage：从 background 发出的 runtime 消息到不了
+ * content script，Gecko 直接报 "Could not establish connection. Receiving end does not exist."
+ * （此前所有版本的原生事件——方向盘按键、音量键、诊断——全卡死在这一行，静默丢失）。
+ * 按扩展规范，给 content script 发消息必须走 tabs.sendMessage。
+ */
+function broadcastPush(pushMsg) {
+  browser.tabs.query({}).then(function (tabs) {
+    (tabs || []).forEach(function (t) {
+      if (!t || typeof t.id !== "number") return;
+      browser.tabs.sendMessage(t.id, { target: "content", push: pushMsg }).catch(function () {});
+    });
+  }).catch(function () {});
+}
+
 function onNativeMessage(msg) {
+  // 原生推送（无 id，如 system.mediaKey）：广播给所有 content script，不进 pending map
+  if (msg && msg.push) {
+    broadcastPush(msg);
+    return;
+  }
   if (!msg || typeof msg.id === "undefined") return;
   if (pending.has(msg.id)) {
     const done = pending.get(msg.id);

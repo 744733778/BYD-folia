@@ -145,6 +145,12 @@ export const getSizedCoverUrl = (url: string | null | undefined, size: number): 
             return urlObj.toString();
         }
 
+        // 原生壳 LocalHttpServer /cover?uri=（SAF contentUri 出图）：壳层支持 ?size= 原生缩放。
+        // 与本地两档缩略图（512/1024）对齐，列表 512、详情 1024 自动受益。
+        if (urlObj.pathname === '/cover' && urlObj.searchParams.has('uri')) {
+            return withLocalCoverThumbnailSize(urlObj, normalizedSize);
+        }
+
         return trimmedUrl;
     } catch {
         if (trimmedUrl.startsWith('/__folia_cover/')) {

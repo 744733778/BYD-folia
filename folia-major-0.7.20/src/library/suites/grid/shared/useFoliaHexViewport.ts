@@ -17,6 +17,11 @@ export interface UseFoliaHexViewportOptions {
     renderRing: number;
     fallbackIndexRef?: RefObject<number>;
     coords?: HexGridCoord[];
+    /**
+     * 平面（2D）网格用的可见下标解析器：传了就绕过蜂窝几何（cube 中心 + 六边形环），
+     * 直接按像素矩形/半径算。签名 (worldX, worldY, radius) => indexes。
+     */
+    resolveIndexes?: (worldX: number, worldY: number, radius: number) => number[];
 }
 
 export const useFoliaHexViewport = ({
@@ -27,6 +32,7 @@ export const useFoliaHexViewport = ({
     renderRing,
     fallbackIndexRef,
     coords: customCoords,
+    resolveIndexes,
 }: UseFoliaHexViewportOptions) => {
     const generatedCoordsRef = useRef<HexGridCoord[]>([]);
     const generatedSpacingRef = useRef({ x: spacingX, y: spacingY });
@@ -86,19 +92,23 @@ export const useFoliaHexViewport = ({
 
         const worldX = -dx;
         const worldY = -dy;
-        const centerCube = pixelToCubeCenter(worldX, worldY, spacingX, spacingY);
-        const centerKey = toCubeKey(centerCube);
+        // 平面模式按格子中心取整做「窗口移动」判定；蜂窝模式用 cube 键。
+        const centerKey = resolveIndexes
+            ? `${Math.round(worldX / spacingX)}:${Math.round(worldY / spacingY)}`
+            : toCubeKey(pixelToCubeCenter(worldX, worldY, spacingX, spacingY));
         if (!force && centerKey === lastVisibleCenterKeyRef.current) return;
 
-        const nextIndexes = resolveVisibleHexIndexes(
-            centerCube,
-            renderRing,
-            coordByKey,
-            coords,
-            worldX,
-            worldY,
-            renderRadius
-        );
+        const nextIndexes = resolveIndexes
+            ? resolveIndexes(worldX, worldY, renderRadius)
+            : resolveVisibleHexIndexes(
+                pixelToCubeCenter(worldX, worldY, spacingX, spacingY),
+                renderRing,
+                coordByKey,
+                coords,
+                worldX,
+                worldY,
+                renderRadius
+            );
 
         const fallbackIndex = fallbackIndexRef?.current ?? 0;
         if (nextIndexes.length === 0 && fallbackIndex >= 0 && fallbackIndex < coords.length) {
@@ -115,7 +125,7 @@ export const useFoliaHexViewport = ({
         startTransition(() => {
             setRenderedIndexes(nextIndexes);
         });
-    }, [coordByKey, coords, fallbackIndexRef, renderRadius, renderRing, spacingX, spacingY]);
+    }, [coordByKey, coords, fallbackIndexRef, renderRadius, renderRing, resolveIndexes, spacingX, spacingY]);
 
     return {
         coords,

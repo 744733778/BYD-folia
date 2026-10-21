@@ -146,7 +146,7 @@ const AppearanceSection: React.FC<AppearanceSectionProps> = ({
     return (
         <div className="space-y-1">
             {/* 思索「歌词样式」的埋点：两行一起算，因为那一章讲的就是歌词和背景各选各的。 */}
-            <div data-ponder="lyric-style" className="space-y-1">
+            <div className="space-y-1">
                 <ModeStepperRow<VisualizerMode>
                     value={visualizerMode}
                     options={visualizerOptions}

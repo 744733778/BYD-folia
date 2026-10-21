@@ -40,7 +40,7 @@ const PlayerControlSlotButton: React.FC<PlayerControlSlotButtonProps> = ({
         <button
             type="button"
             // 思索教程按它认这个槽位放的是哪个动作。纯标记，不参与任何行为。
-            data-ponder-slot={actionId}
+            
             onClick={(e) => {
                 e.stopPropagation();
                 if (disabled) {

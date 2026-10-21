@@ -8,17 +8,10 @@ import { useSettingsModalStore } from '../stores/useSettingsModalStore';
 
 const LAST_SEEN_RELEASE_NOTES_VERSION_STORAGE_KEY = 'folia_last_seen_guide_version';
 
-export type StartupExperienceStep = 'release-notes' | 'playback-entry-view' | 'ponder' | null;
+export type StartupExperienceStep = 'release-notes' | 'playback-entry-view' | null;
 
 type StartupExperienceState = {
     isCurrentRelease: boolean;
-    /** Ponder onboarding was completed in some version (it is shown once per install). */
-    hasSeenPonder: boolean;
-    /**
-     * Ponder onboarding was completed in this version. It is the last startup step and nothing else opens it,
-     * so this means the whole sequence already ran for this release.
-     */
-    hasFinishedThisRelease: boolean;
     hasSeenReleaseNotes: boolean;
     isReleaseNotesOpen: boolean;
     hasChosenPlaybackEntryView: boolean;
@@ -28,25 +21,21 @@ type StartupExperienceState = {
      */
     needsLibrarySuitePrompt: boolean;
     isPlaybackEntryViewPromptOpen: boolean;
-    isPonderOnboardingOpen: boolean;
 };
 
 /** Chooses the next blocking surface while ensuring that two startup dialogs never overlap. */
 export const resolveStartupExperienceStep = ({
     isCurrentRelease,
-    hasSeenPonder,
-    hasFinishedThisRelease,
     hasSeenReleaseNotes,
     isReleaseNotesOpen,
     hasChosenPlaybackEntryView,
     needsLibrarySuitePrompt,
     isPlaybackEntryViewPromptOpen,
-    isPonderOnboardingOpen,
 }: StartupExperienceState): StartupExperienceStep => {
-    // foliaAPP：首启不弹任何引导（版本更新 / 资料库与播放视图选择 / 思索模式）。直接返回 null 关闭全部。
-    void isCurrentRelease; void hasSeenPonder; void hasFinishedThisRelease; void hasSeenReleaseNotes;
+    // foliaAPP：首启不弹任何引导（版本更新 / 资料库与播放视图选择）。直接返回 null 关闭全部。
+    void isCurrentRelease; void hasSeenReleaseNotes;
     void isReleaseNotesOpen; void hasChosenPlaybackEntryView; void needsLibrarySuitePrompt;
-    void isPlaybackEntryViewPromptOpen; void isPonderOnboardingOpen;
+    void isPlaybackEntryViewPromptOpen;
     return null;
 };
 
@@ -57,14 +46,11 @@ const readLastSeenReleaseNotesVersion = (): string | null => (
 );
 
 /**
- * Runs the first-launch sequence: release notes, the two-page choice prompt (library interface, then
- * playback destination), then the Ponder shortcut gate. The prompt is gated by the playback choice alone,
+ * Runs the first-launch sequence: release notes, then the two-page choice prompt (library
+ * interface, then playback destination). The prompt is gated by the playback choice alone,
  * so installs that answered the older single-page prompt are not asked again.
  */
 export const useStartupExperienceGate = () => {
-    const lastSeenPonderVersion = useSettingsModalStore(state => state.lastSeenGuideVersion);
-    const isPonderOnboardingOpen = useSettingsModalStore(state => state.isUserGuideModalOpen);
-    const setIsPonderOnboardingOpen = useSettingsModalStore(state => state.setIsUserGuideModalOpen);
     const hasChosenPlaybackEntryView = usePlaybackEntryViewStore(state => state.hasChosenPlaybackEntryView);
     const hasSeenLibrarySuitePrompt = usePlaybackEntryViewStore(state => state.hasSeenLibrarySuitePrompt);
     const needsLibrarySuitePrompt = hasOnboardingLibrarySuiteChoice() && !hasSeenLibrarySuitePrompt;
@@ -75,14 +61,11 @@ export const useStartupExperienceGate = () => {
 
     const nextStep = resolveStartupExperienceStep({
         isCurrentRelease: Boolean(appVersion && USER_GUIDE_AUTO_OPEN_VERSION === appVersion),
-        hasSeenPonder: lastSeenPonderVersion !== null,
-        hasFinishedThisRelease: Boolean(appVersion && lastSeenPonderVersion === appVersion),
         hasSeenReleaseNotes: Boolean(appVersion && lastSeenReleaseNotesVersion === appVersion),
         isReleaseNotesOpen,
         hasChosenPlaybackEntryView,
         needsLibrarySuitePrompt,
         isPlaybackEntryViewPromptOpen,
-        isPonderOnboardingOpen,
     });
 
     useEffect(() => {
@@ -90,10 +73,8 @@ export const useStartupExperienceGate = () => {
             setIsReleaseNotesOpen(true);
         } else if (nextStep === 'playback-entry-view') {
             requestPlaybackEntryViewPrompt({ withLibrarySuite: hasOnboardingLibrarySuiteChoice() });
-        } else if (nextStep === 'ponder') {
-            setIsPonderOnboardingOpen(true);
         }
-    }, [nextStep, setIsPonderOnboardingOpen]);
+    }, [nextStep]);
 
     const closeReleaseNotes = useCallback(() => {
         if (appVersion) {

@@ -117,7 +117,7 @@ const LyricFileDialog: React.FC<LyricFileDialogProps> = ({
             title={t('lyricFile.title')}
             description={t(onImportChange ? 'lyricFile.description' : 'lyricFile.descriptionExportOnly')}
         >
-            <div data-ponder="lyric-file-dialog" className="space-y-5">
+            <div className="space-y-5">
                 {onImportChange && (
                     <section>
                         {renderSectionHeading(t('lyricFile.importHeading'))}

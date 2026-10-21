@@ -13,6 +13,7 @@ import { useSettingsModalStore } from '../../stores/useSettingsModalStore';
 import { useAppViewStore } from '../../stores/useAppViewStore';
 import { useInteractionSettingsStore } from '../../stores/useInteractionSettingsStore';
 import { resolveCustomShortcutCommand } from './customShortcut';
+import { isNativeAndroidShell } from '../../services/foliaExtensionBridge';
 
 // src/components/command-palette/useCommandPalette.ts
 import { effectiveKeyCode, isCommandPaletteShortcut, isTextEntryTarget } from '../../utils/keyboardTargets';
@@ -484,6 +485,13 @@ export const useCommandPalette = ({
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
+            // 原生安卓 GeckoView 壳：PC 的 Ctrl/Cmd/字母组合热键（命令面板、过滤器触发、
+            // 自定义快捷键）一律不注册；上/下一曲走 usePlaybackInteractionBridge 的 Ctrl+←/→，
+            // 方向盘/线控媒体键走 onNativeMediaKey 事件通道。
+            if (isNativeAndroidShell()) {
+                return;
+            }
+
             // Ordered by who has the stronger claim on the keystroke, not by how the palette is
             // built. A modifier shortcut can never be mistaken for input, so it goes first; a
             // surface that reads bare characters outranks every modifier-free palette key, or the

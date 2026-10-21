@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isNativeAndroidShell } from '../../../services/foliaExtensionBridge';
 import type { LocalLibraryGroup, LocalPlaylist, LocalSong } from '../../../types';
 import type { LibraryAccountController } from '../../core/contracts/account';
 import type { LibraryCollectionDescriptor } from '../../core/contracts/collection';
@@ -253,8 +254,13 @@ export const LibraryTuiLocalList: React.FC<LibraryTuiListCommonProps & {
                 {fileInput}
                 <span>{t('localMusic.noLocalMusic')}</span>
                 {common.declaredActions.actions.includes('home-import-folder') ? (
-                    <button type="button" disabled={importBusy} onClick={() => void homeActions.importFolder()} className="self-start opacity-70 hover:opacity-100 disabled:opacity-30">
-                        {`[${actionState.scan?.active ? t('options.scanning') : actionState.importingFolder ? t('localMusic.importing') : t('localMusic.importFolder')}]`}
+                    <button type="button" disabled={importBusy} onClick={() => {
+                        if (isNativeAndroidShell()) void homeActions.refreshFolders();
+                        else void homeActions.importFolder();
+                    }} className="self-start opacity-70 hover:opacity-100 disabled:opacity-30">
+                        {`[${isNativeAndroidShell()
+                            ? (actionState.scan?.active ? t('options.scanning') : t('options.refresh'))
+                            : (actionState.scan?.active ? t('options.scanning') : actionState.importingFolder ? t('localMusic.importing') : t('localMusic.importFolder'))}]`}
                     </button>
                 ) : null}
             </StatusText>

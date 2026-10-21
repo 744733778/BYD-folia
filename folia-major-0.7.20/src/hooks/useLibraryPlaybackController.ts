@@ -441,7 +441,7 @@ export function useLibraryPlaybackController({
     }, [patchLocalSongsInState, setStatusMsg]);
 
     const resolveLocalMetadataUI = useCallback(async (localData: LocalSong, matchedSong: SongResult | null) => {
-        const localCoverUrl = getLocalCoverAssetUrl(localData.localCoverAssetId, 1024);
+        const localCoverUrl = localData.nativeCoverUrl || getLocalCoverAssetUrl(localData.localCoverAssetId, 1024);
         const preferOnlineCover = localData.useOnlineCover === true;
         const coverUrl = preferOnlineCover
             ? (localData.onlineMetadata?.coverUrl || localCoverUrl || null)

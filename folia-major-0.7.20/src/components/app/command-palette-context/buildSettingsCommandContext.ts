@@ -16,7 +16,6 @@ import { hasLibrarySuiteChoice } from '../../../library/registry';
 import { chooseLibrarySuite, getActiveLibrarySuiteId, listLibrarySuiteOptions } from '../../../library/app/librarySuiteChoice';
 import { isBravaisLibraryActive } from '../../../library/app/bravaisLibraryActive';
 import { useLibraryWallLookStore } from '../../../stores/useLibraryWallLookStore';
-import { usePonderStore } from '../../../stores/usePonderStore';
 import { useHomeLayoutSettingsStore } from '../../../stores/useHomeLayoutSettingsStore';
 import { usePlayerChromeSettingsStore } from '../../../stores/usePlayerChromeSettingsStore';
 import { useSettingsModalStore } from '../../../stores/useSettingsModalStore';
@@ -67,7 +66,6 @@ export const buildSettingsCommandContext = (
     const themeQuickEditor = useThemeQuickEditorStore.getState();
     const lattice = useLatticeSettingsStore.getState();
     const entryView = usePlaybackEntryViewStore.getState();
-    const ponder = usePonderStore.getState();
 
     return {
         openSettings: modal.openSettings,
@@ -114,12 +112,6 @@ export const buildSettingsCommandContext = (
         toggleLibraryWallBackdropBlur: () => {
             const wall = useLibraryWallLookStore.getState();
             wall.setBackdropBlur(!wall.backdropBlur);
-        },
-        ponderHintVisibility: ponder.ponderHintVisibility,
-        setPonderHintVisibility: ponder.setPonderHintVisibility,
-        togglePonderTouchButton: () => {
-            const state = usePonderStore.getState();
-            state.setShowPonderTouchButton(!state.showPonderTouchButton);
         },
         toggleRememberHomeCardPosition: () => {
             const home = useHomeLayoutSettingsStore.getState();

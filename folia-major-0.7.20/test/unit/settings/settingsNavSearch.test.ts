@@ -36,11 +36,11 @@ describe('searchSettingsNav', () => {
     });
 
     it('keeps only the matching anchors when an anchor label matches', () => {
-        const result = searchSettingsNav(desktopGroups, '思索', 'zh-CN');
-        const general = flattenSettingsNavItems(result.groups).find(item => item.id === 'general');
+        const result = searchSettingsNav(desktopGroups, '性能', 'zh-CN');
+        const graphics = flattenSettingsNavItems(result.groups).find(item => item.id === 'graphics');
 
-        expect(general?.anchors.map(anchor => anchor.id)).toEqual(['ponderHints']);
-        expect(result.firstHit).toEqual({ sectionId: 'general', anchorId: 'ponderHints' });
+        expect(graphics?.anchors.map(anchor => anchor.id)).toEqual(['graphicsPerformance']);
+        expect(result.firstHit).toEqual({ sectionId: 'graphics', anchorId: 'graphicsPerformance' });
     });
 
     it('keeps every anchor of a section whose own title matches', () => {

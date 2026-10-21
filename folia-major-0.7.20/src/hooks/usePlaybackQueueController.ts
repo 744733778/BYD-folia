@@ -974,7 +974,10 @@ export function usePlaybackQueueController({
     ]);
 
     const handleNextTrack = useCallback(async (options?: NextTrackOptions) => {
-        if (isNowPlayingStageActive) return;
+        if (isNowPlayingStageActive && !options?.ignoreStageGuard) {
+            console.log('[Queue] next skipped: now-playing stage active');
+            return;
+        }
 
         const stopAtQueueEnd = () => {
             if (audioRef.current) {
@@ -986,6 +989,9 @@ export function usePlaybackQueueController({
         // An emptied queue still has to stop playback at the end of the current track; returning
         // early here left the audio element `ended` while playerState stayed PLAYING.
         if (!currentSong || playQueue.length === 0) {
+            console.log('[Queue] next skipped: no current song or empty queue', {
+                hasSong: Boolean(currentSong), queueLength: playQueue.length,
+            });
             if (options?.allowStopOnMissing) {
                 stopAtQueueEnd();
             }
@@ -1004,8 +1010,24 @@ export function usePlaybackQueueController({
         // through as the transition's own doing - leaving the fade running against a deck that is
         // reloading underneath it.
         if (heldSong) endHeldTransition?.();
-        const currentSongKey = getPlaybackSongKey(heldSong ?? options?.fromSong ?? currentSong);
-        const currentIndex = playQueue.findIndex(song => getPlaybackSongKey(song) === currentSongKey);
+        const probe = heldSong ?? options?.fromSong ?? currentSong;
+        const currentSongKey = getPlaybackSongKey(probe);
+        let currentIndex = playQueue.findIndex(song => getPlaybackSongKey(song) === currentSongKey);
+        if (currentIndex < 0) {
+            // 舞台（歌词演绎/正在播放）会把当前歌包成 kind:'stage' 的影子对象，key 与队列对不上
+            //（实测：点本地歌进歌词舞台后 currentIndex 恒为 -1）。按 标题+主歌手 次级匹配找回
+            // 队列位置，否则 next 会错跳回队首、prev 直接失效。
+            const probeName = probe?.name?.trim().toLowerCase();
+            const probeArtist = probe?.artists?.[0]?.name?.trim().toLowerCase();
+            if (probeName) {
+                currentIndex = playQueue.findIndex(s =>
+                    s.name?.trim().toLowerCase() === probeName
+                    && (!probeArtist || s.artists?.[0]?.name?.trim().toLowerCase() === probeArtist));
+            }
+            if (currentIndex >= 0) {
+                console.log(`[Queue] key miss (${currentSongKey}), matched by title/artist at index ${currentIndex}`);
+            }
+        }
 
         if (isFmMode && currentIndex >= playQueue.length - 2) {
             try {
@@ -1045,20 +1067,46 @@ export function usePlaybackQueueController({
             });
         } else if (options?.allowStopOnMissing) {
             stopAtQueueEnd();
+        } else {
+            // 静默结束（单曲队列 + 非列表循环）也会被当成"按键没反应"，留一行才知道走到了这。
+            // logcat 的 web console 只取第一个字符串参数，诊断一律 JSON.stringify 进同一行。
+            console.log(`[Queue] next: no target track ${JSON.stringify({ currentIndex, loopMode, queueLength: playQueue.length })}`);
         }
     }, [audioRef, currentSong, endHeldTransition, getDisplaySong, isFmMode, isNowPlayingStageActive, loopMode, playQueue, playSong, setPlayQueue, setPlayerState, shouldNavigateToPlayerOnTrackChange]);
 
-    const handlePrevTrack = useCallback(() => {
-        if (isNowPlayingStageActive) return;
-        if (!currentSong || playQueue.length === 0) return;
+    const handlePrevTrack = useCallback((options?: { ignoreStageGuard?: boolean }) => {
+        if (isNowPlayingStageActive && !options?.ignoreStageGuard) {
+            console.log('[Queue] prev skipped: now-playing stage active');
+            return;
+        }
+        if (!currentSong || playQueue.length === 0) {
+            console.log('[Queue] prev skipped: no current song or empty queue', {
+                hasSong: Boolean(currentSong), queueLength: playQueue.length,
+            });
+            return;
+        }
 
         // Same as handleNextTrack, and more visibly wrong without it: stepping back from the track
         // a blend has already advanced to lands on the one the listener is hearing, so "previous"
         // replays the current song instead of going past it.
         const heldSong = getDisplaySong?.() ?? null;
         if (heldSong) endHeldTransition?.();
-        const currentSongKey = getPlaybackSongKey(heldSong ?? currentSong);
-        const currentIndex = playQueue.findIndex(song => getPlaybackSongKey(song) === currentSongKey);
+        const probe = heldSong ?? currentSong;
+        const currentSongKey = getPlaybackSongKey(probe);
+        let currentIndex = playQueue.findIndex(song => getPlaybackSongKey(song) === currentSongKey);
+        if (currentIndex < 0) {
+            // 与 handleNextTrack 同一个次级匹配：舞台影子对象的 key 对不上队列。
+            const probeName = probe?.name?.trim().toLowerCase();
+            const probeArtist = probe?.artists?.[0]?.name?.trim().toLowerCase();
+            if (probeName) {
+                currentIndex = playQueue.findIndex(s =>
+                    s.name?.trim().toLowerCase() === probeName
+                    && (!probeArtist || s.artists?.[0]?.name?.trim().toLowerCase() === probeArtist));
+            }
+            if (currentIndex >= 0) {
+                console.log(`[Queue] key miss (${currentSongKey}), matched by title/artist at index ${currentIndex}`);
+            }
+        }
         let prevIndex = -1;
 
         if (currentIndex > 0) {
@@ -1071,8 +1119,17 @@ export function usePlaybackQueueController({
             void playSong(playQueue[prevIndex], playQueue, isFmMode, {
                 shouldNavigateToPlayer: shouldNavigateToPlayerOnTrackChange,
             });
+        } else {
+            // 与 next 的 fallback（跳队列第一首）对称的失败路径：当前歌不在队列里（典型：续播
+            // 恢复的会话 key 对不上）时 currentIndex 为 -1，prev 曾经一声不吭，正是"上一曲
+            // 无效、下一曲有效"的来源。留一行诊断，行为保持保守不乱跳。
+            console.log(`[Queue] prev: no target track ${JSON.stringify({ currentIndex, loopMode, queueLength: playQueue.length })}`);
         }
     }, [currentSong, endHeldTransition, getDisplaySong, isFmMode, isNowPlayingStageActive, loopMode, playQueue, playSong, shouldNavigateToPlayerOnTrackChange]);
+
+    // 原生媒体键不在这里处理：统一由 useMediaSessionBridge 分发到与 W3C MediaSession 相同的一组
+    // 动作 ref。这里曾经订阅过一次并只认 next / 其它一律当 prev，方向盘上的播放暂停键会变成
+    // "上一曲"，且与 shim 的重复分发叠加会一次跳两首。
 
     // 失败消息可能挂很久才被点：按钮经这里调用最新一次渲染的 handleNextTrack / playSong，按点击时的队列走，期间的编辑不被旧快照覆盖。
     // 点歌失败（playSong 里的 presentOnlineFailure）的重试 / 跳过也用它；那些闭包只在点击时读 .current，晚于这里的声明。

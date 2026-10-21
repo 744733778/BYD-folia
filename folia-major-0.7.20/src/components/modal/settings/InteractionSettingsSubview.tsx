@@ -19,6 +19,7 @@ import {
     useInteractionSettingsStore,
     type GridActionButtonSlideTarget,
 } from '../../../stores/useInteractionSettingsStore';
+import { isNativeAndroidShell } from '../../../services/foliaExtensionBridge';
 
 // src/components/modal/settings/InteractionSettingsSubview.tsx
 // How the listener reaches the command palette: what the grids' action button leads to, whether a
@@ -151,63 +152,68 @@ export const InteractionSettingsSubview: React.FC<InteractionSettingsSubviewProp
                 </div>
             </SettingsAnchor>
 
-            <SettingsAnchor anchorId="gridPaletteHotkey" label={t('options.gridPaletteHotkey')}>
-                <SettingsSectionHeading icon={Command} label={t('options.gridPaletteHotkey')} />
-                <div className={`p-4 rounded-xl border ${settingsCardClass}`}>
-                    <div className="flex items-center justify-between gap-4">
+            {/* 原生安卓壳：无物理键盘，PC 热键全部不注册，相关设置/文案一并隐藏。 */}
+            {!isNativeAndroidShell() && (
+                <SettingsAnchor anchorId="gridPaletteHotkey" label={t('options.gridPaletteHotkey')}>
+                    <SettingsSectionHeading icon={Command} label={t('options.gridPaletteHotkey')} />
+                    <div className={`p-4 rounded-xl border ${settingsCardClass}`}>
+                        <div className="flex items-center justify-between gap-4">
+                            <div className="space-y-1">
+                                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                                    {t('options.gridPaletteHotkey')}
+                                </div>
+                                <div className="text-[11px] opacity-50 max-w-[420px]" style={{ color: 'var(--text-secondary)' }}>
+                                    {t('options.gridPaletteHotkeyDesc')}
+                                </div>
+                            </div>
+                            {renderToggle(
+                                gridCommandPaletteHotkey,
+                                () => handleToggleGridCommandPaletteHotkey(!gridCommandPaletteHotkey),
+                                t('options.gridPaletteHotkey'),
+                            )}
+                        </div>
+                    </div>
+                </SettingsAnchor>
+            )}
+
+            {!isNativeAndroidShell() && (
+                <SettingsAnchor anchorId="customShortcut" label={t('options.customShortcut')}>
+                    <SettingsSectionHeading icon={Keyboard} label={t('options.customShortcut')} />
+                    <div className={`p-4 rounded-xl border space-y-4 ${settingsCardClass}`}>
                         <div className="space-y-1">
                             <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                                {t('options.gridPaletteHotkey')}
+                                {t('options.customShortcut')}
                             </div>
                             <div className="text-[11px] opacity-50 max-w-[420px]" style={{ color: 'var(--text-secondary)' }}>
-                                {t('options.gridPaletteHotkeyDesc')}
+                                {t('options.customShortcutDesc')}
                             </div>
                         </div>
-                        {renderToggle(
-                            gridCommandPaletteHotkey,
-                            () => handleToggleGridCommandPaletteHotkey(!gridCommandPaletteHotkey),
-                            t('options.gridPaletteHotkey'),
-                        )}
-                    </div>
-                </div>
-            </SettingsAnchor>
-
-            <SettingsAnchor anchorId="customShortcut" label={t('options.customShortcut')}>
-                <SettingsSectionHeading icon={Keyboard} label={t('options.customShortcut')} />
-                <div className={`p-4 rounded-xl border space-y-4 ${settingsCardClass}`}>
-                    <div className="space-y-1">
-                        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                            {t('options.customShortcut')}
-                        </div>
-                        <div className="text-[11px] opacity-50 max-w-[420px]" style={{ color: 'var(--text-secondary)' }}>
-                            {t('options.customShortcutDesc')}
-                        </div>
-                    </div>
-                    {/* One row, two halves of one sentence: this key runs that command. The column
-                        captions are gone because the caps and the select already say which is which. */}
-                    <div className="grid items-center gap-3 sm:grid-cols-2">
-                        <ShortcutCaptureField
-                            value={customShortcutLetter}
-                            onChange={setCustomShortcutLetter}
-                            validate={validateShortcutKey}
-                            label={t('options.customShortcutKey')}
-                            isDaylight={isDaylight}
-                            theme={theme}
-                        />
-                        <div className="min-w-0">
-                            <CustomSelect
-                                value={customShortcutCommandId ?? ''}
-                                onChange={(value) => setCustomShortcutCommandId(value || null)}
-                                options={commandOptions}
-                                ariaLabel={t('options.customShortcutCommand')}
-                                placeholder={t('options.customShortcutNoCommand')}
+                        {/* One row, two halves of one sentence: this key runs that command. The column
+                            captions are gone because the caps and the select already say which is which. */}
+                        <div className="grid items-center gap-3 sm:grid-cols-2">
+                            <ShortcutCaptureField
+                                value={customShortcutLetter}
+                                onChange={setCustomShortcutLetter}
+                                validate={validateShortcutKey}
+                                label={t('options.customShortcutKey')}
                                 isDaylight={isDaylight}
                                 theme={theme}
                             />
+                            <div className="min-w-0">
+                                <CustomSelect
+                                    value={customShortcutCommandId ?? ''}
+                                    onChange={(value) => setCustomShortcutCommandId(value || null)}
+                                    options={commandOptions}
+                                    ariaLabel={t('options.customShortcutCommand')}
+                                    placeholder={t('options.customShortcutNoCommand')}
+                                    isDaylight={isDaylight}
+                                    theme={theme}
+                                />
+                            </div>
                         </div>
                     </div>
-                </div>
-            </SettingsAnchor>
+                </SettingsAnchor>
+            )}
         </div>
     );
 };

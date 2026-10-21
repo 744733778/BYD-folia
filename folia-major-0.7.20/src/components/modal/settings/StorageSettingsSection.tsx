@@ -275,7 +275,7 @@ const StorageSettingsSection: React.FC<StorageSettingsSectionProps> = ({
                                 {item.id === 'lyrics' && (
                                     <button
                                         type="button"
-                                        data-ponder-lyric-export-settings-entry
+
                                         onClick={() => {
                                             openCommandPaletteCommand(LYRIC_EXPORT_COMMAND_ID);
                                             closeSettings();

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AudioLines, ChevronRight, ListFilter, Monitor, PlayCircle, Radio, RefreshCw, Settings2, Timer } from 'lucide-react';
+import { AudioLines, ChevronRight, ListFilter, Monitor, PlayCircle, Power, Radio, RefreshCw, Settings2, Timer } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import type { LocalLyricsPriority, QueueAddBehavior, ReplayGainMode, Theme } from '../../../types';
@@ -54,10 +54,12 @@ const PlaybackSettingsSubview: React.FC<PlaybackSettingsSubviewProps> = ({
         playbackFadeEnabled,
         autoSkipUnplayable,
         queueAddBehavior,
+        resumePlayingOnLaunch,
         onToggleTranscodeFallback,
         onToggleNeteaseScrobble,
         onTogglePlaybackFade,
         onToggleAutoSkipUnplayable,
+        onToggleResumePlayingOnLaunch,
         onQueueAddBehaviorChange,
     } = useAudioSettingsStore(useShallow(state => ({
         audioOutputDeviceId: state.audioOutputDeviceId,
@@ -66,10 +68,12 @@ const PlaybackSettingsSubview: React.FC<PlaybackSettingsSubviewProps> = ({
         playbackFadeEnabled: state.playbackFadeEnabled,
         autoSkipUnplayable: state.autoSkipUnplayable,
         queueAddBehavior: state.queueAddBehavior,
+        resumePlayingOnLaunch: state.resumePlayingOnLaunch,
         onToggleTranscodeFallback: state.handleToggleTranscodeFallback,
         onToggleNeteaseScrobble: state.handleToggleNeteaseScrobble,
         onTogglePlaybackFade: state.handleTogglePlaybackFade,
         onToggleAutoSkipUnplayable: state.handleToggleAutoSkipUnplayable,
+        onToggleResumePlayingOnLaunch: state.handleToggleResumePlayingOnLaunch,
         onQueueAddBehaviorChange: state.handleSetQueueAddBehavior,
     })));
     // Subscribed to rather than read once: the panel has to grey out the moment the NetEase account
@@ -188,6 +192,23 @@ const PlaybackSettingsSubview: React.FC<PlaybackSettingsSubviewProps> = ({
 
     return (
         <div className="space-y-5">
+            <SettingsAnchor anchorId="launchBehavior" label={t('options.launchBehavior')}>
+                <SettingsSectionHeading icon={Power} label={t('options.launchBehavior')} />
+                <div className={`p-4 rounded-xl border ${settingsCardClass}`}>
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1">
+                            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                                {t('options.resumePlayingOnLaunch')}
+                            </div>
+                            <div className="text-[11px] opacity-50 max-w-[440px]" style={{ color: 'var(--text-secondary)' }}>
+                                {t('options.resumePlayingOnLaunchDesc')}
+                            </div>
+                        </div>
+                        {renderToggle(resumePlayingOnLaunch, () => onToggleResumePlayingOnLaunch(!resumePlayingOnLaunch))}
+                    </div>
+                </div>
+            </SettingsAnchor>
+
             <SettingsAnchor anchorId="queueSettings" label={t('options.queueSettings')}>
                 <SettingsSectionHeading icon={PlayCircle} label={t('options.queueSettings')} />
                 <div className={`p-4 rounded-xl border space-y-4 ${settingsCardClass}`}>

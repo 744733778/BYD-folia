@@ -12,6 +12,17 @@ import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * 安卓 GeckoView 壳的构建（`VITE_ANDROID_SHELL=1`）。
+ *
+ * 壳内页面由本地 http 服务器从 APK assets 提供，升级 APK 就等于换内容，不需要离线缓存；
+ * 而 Service Worker 的预缓存会按 URL 把 index.html 和整套 assets 钉死，配合壳里固定的
+ * 端口(origin 不变)，升级后页面仍然跑旧 JS —— 原生(dex)是新的、前端却停在几版之前。
+ * 所以壳内不注册 SW，并且生成一个"自毁"版 sw.js：还留着旧 SW 的客户端装上这个 APK
+ * 后，拿到的下一份 sw.js 会把自己注销并把缓存清空。
+ */
+const isAndroidShellBuild = process.env.VITE_ANDROID_SHELL === '1';
+
 const LYRIC_PROXY_CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,OPTIONS,PATCH,DELETE,POST,PUT',
@@ -270,6 +281,9 @@ export default async function viteConfig(_config: ConfigEnv): Promise<UserConfig
       react(),
       VitePWA({
         registerType: 'autoUpdate',
+        // 壳内：不注入注册脚本，并让构建出来的 sw.js 自我注销 + 清缓存（见 isAndroidShellBuild）。
+        injectRegister: isAndroidShellBuild ? false : 'auto',
+        selfDestroying: isAndroidShellBuild,
         includeAssets: ['icon.svg'],
         devOptions: {
           enabled: true
@@ -320,6 +334,8 @@ export default async function viteConfig(_config: ConfigEnv): Promise<UserConfig
       '__BUILD_KIND__': JSON.stringify(buildKind.kind),
       '__BUILD_HOST__': JSON.stringify(buildKind.host ?? ''),
       '__APP_VERSION__': JSON.stringify(JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')).version),
+      // 构建时刻。本地构建没有 git commit 可认时，这一条是区分"跑的是哪一版前端"的唯一凭据。
+      '__BUILD_TIME__': JSON.stringify(new Date().toISOString()),
       '__APP_VERSION_LABEL__': JSON.stringify(appVersionLabel),
       '__APP_RELEASE_CHANNEL__': JSON.stringify(appReleaseChannel),
       '__DOCKER_STACK_VERSION__': JSON.stringify(dockerStackVersion)

@@ -134,7 +134,7 @@ const resolveLocalCollectionCoverUrlFromTracks = (
         return preferredSong.onlineMetadata.coverUrl;
     }
 
-    const localCoverUrl = getLocalCoverAssetUrl(preferredSong.localCoverAssetId, 512);
+    const localCoverUrl = preferredSong.nativeCoverUrl || getLocalCoverAssetUrl(preferredSong.localCoverAssetId, 512);
     if (localCoverUrl) return localCoverUrl;
 
     return preferredSong.onlineMetadata?.coverUrl;

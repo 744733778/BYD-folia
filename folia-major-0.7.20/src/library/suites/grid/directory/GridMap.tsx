@@ -70,7 +70,8 @@ interface GridMapProps {
     hiddenIds?: ReadonlySet<string>;
     onTogglePlaylistHidden?: (item: GridMapItem) => void;
     batchConfig?: GridMapBatchConfig;
-    ponderPageScope?: 'grid-page' | 'local-grid-map-page';
+    /** E2E 定位钩子：标记当前页面范围（网格首页 / 网格目录页）。 */
+    pageScope?: 'grid-page' | 'local-grid-map-page';
 }
 
 const NO_HIDDEN_IDS: ReadonlySet<string> = new Set();
@@ -262,7 +263,7 @@ export const GridMap: React.FC<GridMapProps> = ({
     hiddenIds = NO_HIDDEN_IDS,
     onTogglePlaylistHidden,
     batchConfig,
-    ponderPageScope = 'grid-page',
+    pageScope = 'grid-page',
 }) => {
     const { t } = useTranslation();
     const bottomBarPanelBottomPx = useSidePanelBottomPx();
@@ -978,7 +979,7 @@ export const GridMap: React.FC<GridMapProps> = ({
 
     return (
         <motion.div
-            data-ponder-page-scope={ponderPageScope}
+            data-page-scope={pageScope}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}

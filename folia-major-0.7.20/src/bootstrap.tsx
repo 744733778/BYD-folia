@@ -16,6 +16,7 @@ import { installFoliumHostEvents } from './mods/folium/hostEvents';
 import { installFoliumHomePageDismissal } from './components/app/home/foliumHomePageDismissal';
 import { installLibrarySuiteChromeCommands } from './library/app/installLibrarySuiteChromeCommands';
 import { installNativeDragGuard } from './utils/nativeDragGuard';
+import { isNativeAndroidShell } from './services/foliaExtensionBridge';
 import { bootNavidromeServerPreset } from './services/navidromeServerPreset';
 import { isNavidromeEnabled } from './services/navidromeService';
 import { setNavidromeEnabledState } from './stores/useLibraryStore';
@@ -38,6 +39,17 @@ import './stores/useMotionSettingsStore';
 // here, for every surface this bundle mounts, rather than inside App so the remote-control and OBS
 // roots are covered too and App.tsx does not grow. See utils/nativeDragGuard.ts.
 installNativeDragGuard();
+
+// 原生安卓壳：页面由 LocalHttpServer 本地提供，PWA Service Worker 缓存零收益纯风险——
+// 固定端口后 origin 稳定，SW 会真正持久化并 precache 旧 hash assets，APK 更新后可能加载到旧页面。
+// 启动即全量注销（有则清，无则跳过）；非原生环境不碰。
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && isNativeAndroidShell()) {
+    navigator.serviceWorker.getRegistrations()
+        .then(registrations => {
+            registrations.forEach(registration => { void registration.unregister(); });
+        })
+        .catch(() => undefined);
+}
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -81,6 +93,11 @@ const bootFolium = async () => {
     installFoliumHostEvents();
     // 显式打开集合时关掉开着的模组首页页面；与 Home 挂没挂着无关，所以在这里装（见 foliumHomePageDismissal）。
     installFoliumHomePageDismissal();
+    // 原生安卓壳：Folium mod 客户端是 PC 桌面扩展体系（URL/IFrame/消息协议），车机沙箱无安装源，
+    // 跳过加载省启动开销；非原生（Electron/浏览器）保持原样。
+    if (isNativeAndroidShell()) {
+        return;
+    }
     await initFoliumClients();
     restoreSavedFoliumSelections();
 };

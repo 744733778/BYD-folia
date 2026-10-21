@@ -4,6 +4,7 @@ import { Disc, Pause, Play, Plus, X } from 'lucide-react';
 import type { SongResult, UnifiedSong } from '../../../../types';
 import { getSizedCoverUrl } from '../../../../utils/coverUrl';
 import { canResolveSongCatalogRef } from '../../../../services/onlineMusic/catalogRefs';
+import { isNativeAndroidShell } from '../../../../services/foliaExtensionBridge';
 import { resolveTrackArtistTargetId } from '../../../core/model/trackLinks';
 import type { GridPlaybackMark } from './useGridStayPlayback';
 
@@ -44,6 +45,8 @@ export const PolaroidCardCover: React.FC<{
     isUnavailable: boolean;
     spinnerSize?: number;
 }> = ({ item, isUnavailable, spinnerSize = 48 }) => {
+    // 安卓壳：占位图标不转（几十张卡各挂一个无限 CSS 动画，进入网格时抢主线程/合成器）。
+    const spinnerAnimated = !isNativeAndroidShell();
     if (!item.coverUrl) {
         return (
             <div className="absolute inset-0 bg-zinc-300/40 dark:bg-zinc-700/40 flex items-center justify-center">
@@ -83,7 +86,7 @@ export const PolaroidCardCover: React.FC<{
                 className="w-full h-full object-cover transition-opacity duration-350 pointer-events-none select-none opacity-0"
             />
             <div className="absolute inset-0 bg-zinc-300/40 dark:bg-zinc-700/40 transition-opacity duration-350 flex items-center justify-center">
-                <Disc size={spinnerSize} className="opacity-20 animate-spin" style={{ animationDuration: '3s', color: 'var(--text-primary)' }} />
+                <Disc size={spinnerSize} className={`opacity-20 ${spinnerAnimated ? 'animate-spin' : ''}`} style={{ animationDuration: '3s', color: 'var(--text-primary)' }} />
             </div>
         </>
     );

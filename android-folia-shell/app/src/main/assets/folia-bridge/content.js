@@ -27,21 +27,48 @@
     '  window.foliaBridge = {',
     '    httpRequest: function (requestId, requestJson) {',
     '      sendToBridge("foliaBridge", "httpRequest", requestId, requestJson);',
+    '    },',
+    '    getSystemVolume: function (requestId) {',
+    '      sendToBridge("foliaBridge", "getSystemVolume", requestId, null);',
+    '    },',
+    '    getVolumeMode: function (requestId) {',
+    '      sendToBridge("foliaBridge", "getVolumeMode", requestId, null);',
+    '    },',
+    '    pollEvents: function (requestId, since) {',
+    '      sendToBridge("foliaBridge", "pollEvents", requestId, String(since));',
+    '    },',
+    '    setSystemVolume: function (requestId, level) {',
+    '      sendToBridge("foliaBridge", "setSystemVolume", requestId, String(level));',
+    '    },',
+    '    reportMediaState: function (state) {',
+    '      sendToBridge("media", "state", 0, JSON.stringify(state));',
     '    }',
     '  };',
     '  window.nativeLibrary = {',
     '    isAvailable: true,',
-    '    pickDirectory: function (requestId) {',
-    '      sendToBridge("nativeLibrary", "pickDirectory", requestId, null);',
-    '    },',
     '    readFile: function (requestId, relativePath) {',
     '      sendToBridge("nativeLibrary", "readFile", requestId, relativePath);',
+    '    },',
+    '    listSnapshot: function (requestId) {',
+    '      sendToBridge("nativeLibrary", "listSnapshot", requestId, null);',
+    '    },',
+    '    refreshSnapshot: function (requestId) {',
+    '      sendToBridge("nativeLibrary", "refreshSnapshot", requestId, null);',
+    '    },',
+    '    ensureStorageAccess: function (requestId) {',
+    '      sendToBridge("nativeLibrary", "ensureStorageAccess", requestId, null);',
     '    }',
     '  };',
     '  window.addEventListener("message", function (e) {',
     '    if (e.source !== window) return;',
     '    var d = e.data;',
-    '    if (!d || d.__foliaBridge !== "result") return;',
+    '    if (!d || (d.__foliaBridge !== "result" && d.__foliaBridge !== "event")) return;',
+    '    if (d.__foliaBridge === "event") {',
+    '      if (typeof window.__foliaOnEvent === "function") {',
+    '        window.__foliaOnEvent(d.ns, d.method, d.payload, d.seq);',
+    '      }',
+    '      return;',
+    '    }',
     '    var ok = !!d.ok;',
     '    var payload = typeof d.payload === "string" ? d.payload : (d.payload == null ? "" : String(d.payload));',
     '    if (d.ns === "foliaBridge" && typeof window.__foliaBridgeOnResult === "function") {',
@@ -67,6 +94,19 @@
 
   // document_start: documentElement may already exist
   injectShim();
+
+  // ---- 原生推送中继：background 广播的 push 消息 -> 主世界 event ----
+  browser.runtime.onMessage.addListener(function (msg) {
+    if (msg && msg.target === 'content' && msg.push) {
+      window.postMessage({
+        __foliaBridge: 'event',
+        ns: msg.push.ns,
+        method: msg.push.method,
+        payload: msg.push.payload,
+        seq: msg.push.seq
+      }, '*');
+    }
+  });
 
   // ---- 2. Relay shim <-> background ----
   var bridgeId = 0;

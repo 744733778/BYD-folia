@@ -1,7 +1,6 @@
 import { ChartBar, Heart, ListMusic, PanelsTopLeft, Repeat, Repeat1, RepeatOff, Shuffle, SkipBack, SkipForward, Timer, Volume2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { PlayerControlSlotActionId } from '../../types/playerControlSlots';
-import { noteLoopButtonPress } from '../../services/ponder/loopShuffleHint';
 
 // src/components/floating-player/playerControlSlotActions.ts
 // 进度条胶囊右侧两个可自定义槽位的动作清单。
@@ -96,9 +95,7 @@ export const resolvePlayerControlSlot = (
                 active: context.loopMode !== 'off',
                 disabled: false,
                 onActivate: () => {
-                    // 切循环本身会弹一条模式提示，这一条要在它之后才盖得住。
                     context.onToggleLoop();
-                    noteLoopButtonPress();
                 },
                 labelKey: resolveLoopLabelKey(context.loopMode),
             };

@@ -11,8 +11,8 @@ android {
         applicationId "com.foliaapp.android"
         minSdk 26          // 覆盖绝大多数 Android 8.0+ 设备
         targetSdk 36
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 20
+        versionName "0.1.20"
         ndk {
             abiFilters 'arm64-v8a'   // 车机 arm64-only 实测包
         }
@@ -22,6 +22,29 @@ android {
         release {
             minifyEnabled false
         }
+    }
+
+    // 同一套代码出两个可并存的包：
+    //   full —— 现有的 3D 音乐墙版本（原包名，升级覆盖）
+    //   flat —— 2D 版：除播放页外，音乐墙换成平面网格（启动 URL 带 flat=1），独立包名可同时安装
+    flavorDimensions 'ui'
+    productFlavors {
+        full {
+            dimension 'ui'
+            applicationId "com.foliaapp.android"
+            resValue "string", "app_name", "foliaAPP"
+        }
+        flat {
+            dimension 'ui'
+            applicationId "com.foliaapp.android.flat"
+            resValue "string", "app_name", "folia 2D"
+            versionNameSuffix "-2d"
+        }
+    }
+
+    buildFeatures {
+        // MainActivity 用 BuildConfig.DEBUG 决定是否开 Gecko 远程调试
+        buildConfig true
     }
 
     compileOptions {
@@ -37,6 +60,8 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'
     // SAF 目录访问的 DocumentFile 封装
     implementation 'androidx.documentfile:documentfile:1.0.1'
+    // MediaSession：让车机方向盘/媒体键路由到 APP，并把音量键稳定指向 STREAM_MUSIC
+    implementation 'androidx.media:media:1.7.0'
     // GeckoView 自带浏览器内核（替代系统 WebView）。车机 arm64 单 ABI：
     // geckoview-arm64-v8a 87MB；不加 x86_64（本机无模拟器、车机 arm64）。
     implementation 'org.mozilla.geckoview:geckoview-arm64-v8a:158.0.20261007201254'

@@ -1,0 +1,20 @@
+# GeckoView 配置：只改自动播放与"内核自带的媒体会话"，不动其它内核行为。
+#
+# 1) 自动播放（原有）
+# 车机冷启动"启动即续播"没有任何用户手势。即使 content 层通过 PermissionDelegate 授予了
+# PERMISSION_AUTOPLAY_AUDIBLE（media element 可以播），WebAudio 的 AudioContext 仍按
+# media.autoplay.block-webaudio 以 suspended 状态创建——声音只从 AudioContext 出去，
+# 于是表现为"进度条在走、完全没声音，怎么调音量都没用"。
+#
+# 2) media.hardwaremediakeys.enabled: false（本轮新增，关键）
+# GeckoView 自己也会向系统注册一个 MediaSessionCompat，用来响应硬件媒体键 / 出现在
+# 系统媒体面板里。页面里的 <audio> 一开始播，它就把自己的会话置为活跃——和我们
+# PlaybackService 里那个会话**同时存在**，而且因为它更晚激活，常常抢到顶位：
+#   · 方向盘按键被浏览器会话吃掉，我们的 Activity/Service 一条都收不到（日志两条通路都空）；
+#   · 车机状态栏拿到的是一个没有标题、没有专辑图、没有通知的浏览器会话，
+#     于是干脆什么都不显示（QQ 音乐有完整元数据，所以能显示）。
+# 我们所有元数据、通知、按键都由原生 Service 统一负责，内核那套纯属多余，关掉。
+prefs:
+  media.autoplay.default: 0
+  media.autoplay.block-webaudio: false
+  media.hardwaremediakeys.enabled: false

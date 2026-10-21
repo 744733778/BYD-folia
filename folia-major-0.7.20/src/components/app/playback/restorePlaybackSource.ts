@@ -206,7 +206,7 @@ export const restorePlaybackSourceForSong = async (
         }
 
         songToRestore = await ensureLocalSongCoverAsset(songToRestore);
-        const localCoverUrl = getLocalCoverAssetUrl(songToRestore.localCoverAssetId, 1024);
+        const localCoverUrl = songToRestore.nativeCoverUrl || getLocalCoverAssetUrl(songToRestore.localCoverAssetId, 1024);
         const catalog = await getLocalLibraryCatalogSnapshot();
         if (!isCurrent()) {
             URL.revokeObjectURL(blobUrl);

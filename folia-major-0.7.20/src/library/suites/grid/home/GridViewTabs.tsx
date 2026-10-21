@@ -30,13 +30,11 @@ type GridViewTabsProps = {
     onOpenMap?: () => void;
     mapLabel?: string;
     mapIcon?: React.ReactNode;
-    /** Marks the capsule for the Ponder hover lookup. */
-    ponderId?: string;
 };
 
 const SPRING = { type: 'spring', stiffness: 460, damping: 36, mass: 0.9 } as const;
 
-export const GridViewTabs: React.FC<GridViewTabsProps> = ({ tabs, isDaylight, onOpenMap, mapLabel, mapIcon, ponderId }) => {
+export const GridViewTabs: React.FC<GridViewTabsProps> = ({ tabs, isDaylight, onOpenMap, mapLabel, mapIcon }) => {
     // Scoped per instance so two grids never share one sliding highlight.
     const highlightId = useId();
     const calm = useReducedMotionFor('uiMicroMotion');
@@ -60,7 +58,7 @@ export const GridViewTabs: React.FC<GridViewTabsProps> = ({ tabs, isDaylight, on
             )}
             {onOpenMap && tabs.length > 0 && <span aria-hidden="true" className={`mx-1 h-3.5 w-px ${chrome.divider}`} />}
             {tabs.length > 0 && (
-                <div role="tablist" data-ponder={ponderId} className="flex items-center">
+                <div role="tablist"  className="flex items-center">
                     {tabs.map(tab => {
                         const label = typeof tab.label === 'string' ? tab.label : undefined;
                         const showLabel = tab.active || !tab.icon;

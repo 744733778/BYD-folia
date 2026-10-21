@@ -123,7 +123,7 @@ const panel = (page: Page) => page.getByTestId('unified-panel-surface');
 const openLocalTab = async (page: Page) => {
     if (await panel(page).count() === 0) await page.getByTestId('panel-toggle').click();
     await expect(panel(page)).toBeVisible();
-    await panel(page).locator('[data-ponder-panel-tab-button="local"]').click();
+    await panel(page).locator('[data-panel-tab-button="local"]').click();
     await expect(panel(page).getByRole('button', { name: 'Match Online' })).toBeVisible();
 };
 
@@ -136,7 +136,7 @@ const metadataDialog = (page: Page) => page.getByRole('dialog')
 /** 网格「全部歌曲」里聚焦卡上的铅笔（歌名悬停时出现），打开 LocalSongMetadataMatchDialog。 */
 const openMetadataDialog = async (page: Page) => {
     await expect(page.getByText('Midnight Train').first()).toBeVisible();
-    await page.locator('[data-library-renderer="grid"] [data-ponder="local-metadata-match"]').click();
+    await page.locator('[data-library-renderer="grid"] [data-metadata-match="true"]').click();
     await expect(metadataDialog(page)).toBeVisible();
 };
 
