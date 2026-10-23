@@ -1623,6 +1623,31 @@ function isTitleMatch(localTitle: string, searchTitle: string): boolean {
 }
 
 // Match lyrics for a local song using search API, respecting the configured local/online priority.
+// 某些网易云搜索接口（旧版 /api/search/get/web）只回 album.picId、不回 album.picUrl，
+// 匹配到的歌曲因此没有封面（歌词走另一接口所以照常秒到）。缺封面时补拉一次歌曲详情
+// （/song/detail 回 album.picUrl）把封面补上；只在确实缺封面时触发，正常路径零额外请求。
+const resolveMatchedCoverFallback = async (
+    source: string,
+    songId: number | string | undefined,
+    coverUrl: string | undefined,
+): Promise<string | undefined> => {
+    if (coverUrl || source !== 'netease') return coverUrl;
+    const numericId = Number(songId);
+    if (!Number.isSafeInteger(numericId) || numericId <= 0) return coverUrl;
+    try {
+        const detail = await getOnlineMusicProvider('netease')?.playback?.getSongDetail?.(numericId);
+        const detailCover = detail ? getProviderSongMetadata(detail, 'netease').coverUrl : undefined;
+        if (detailCover) {
+            console.log(`[LocalMusic] Cover resolved from song detail for netease/${numericId}`);
+            return detailCover.replace('http:', 'https:');
+        }
+        console.log(`[LocalMusic] Song detail for netease/${numericId} carries no cover either`);
+    } catch (error) {
+        console.warn('[LocalMusic] Failed to resolve cover from song detail:', error);
+    }
+    return coverUrl;
+};
+
 export async function matchLyrics(song: LocalSong): Promise<LyricData | null> {
     // 用户标记的纯音乐不再自动匹配；与在线判定的纯音乐一样，连带的封面自动匹配也跳过。
     // 下面每次写回都带 skipIfMarkedPureMusic：匹配途中才标上的，写回时在事务里按库里的最新记录放弃。
@@ -1693,7 +1718,11 @@ export async function matchLyrics(song: LocalSong): Promise<LyricData | null> {
                             durationMs: matchContext.durationMs,
                         },
                     );
-                    const coverUrl = matchedMetadata.coverUrl;
+                    const coverUrl = await resolveMatchedCoverFallback(
+                        matchedMetadata.source,
+                        matchedMetadata.songId,
+                        matchedMetadata.coverUrl,
+                    );
                     await applyMatchedMetadata(song.id, {
                         source: matchedMetadata.source,
                         songId: matchedMetadata.songId,
@@ -1742,7 +1771,7 @@ export async function matchLyrics(song: LocalSong): Promise<LyricData | null> {
             console.log(`[LocalMusic] Local/embedded lyrics exist, skipping online lyrics fetch. Only fetching cover/metadata.`);
 
             // Only update metadata and cover, preserve local lyrics
-            const coverUrl = matchedMetadata.coverUrl;
+            const coverUrl = await resolveMatchedCoverFallback('netease', matchedSong.id, matchedMetadata.coverUrl);
             await applyMatchedMetadata(song.id, {
                 source: 'netease',
                 songId: matchedSong.id,
@@ -1774,7 +1803,7 @@ export async function matchLyrics(song: LocalSong): Promise<LyricData | null> {
             return processed.lyrics;
         }
 
-        const coverUrl = matchedMetadata.coverUrl;
+        const coverUrl = await resolveMatchedCoverFallback('netease', matchedSong.id, matchedMetadata.coverUrl);
         await applyMatchedMetadata(song.id, {
             source: 'netease',
             songId: matchedSong.id,

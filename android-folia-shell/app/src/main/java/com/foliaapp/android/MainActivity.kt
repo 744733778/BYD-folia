@@ -1029,11 +1029,26 @@ class MainActivity : AppCompatActivity() {
 
         return when (path) {
             "/cloudsearch" -> {
-                val keywords = enc(query.optString("keywords"))
+                val keywords = query.optString("keywords").orEmpty()
                 val limit = query.optString("limit").ifBlank { "30" }
                 val offset = query.optString("offset").ifBlank { "0" }
-                val url = "$neteaseBase/api/search/get/web?s=$keywords&type=1&limit=$limit&offset=$offset"
-                ensureCode200(execHttp("GET", url, neteaseReferer, headers, cookieOverride = cookieOverride).body)
+                // 必须用新版 PC 云搜索（POST /api/cloudsearch/pc）：它返回 album.picUrl，
+                // 而旧接口 /api/search/get/web 的 album 只有 picId、没有 picUrl——搜索结果
+                // 因此全都没封面，自动匹配只出歌词不出封面（歌词走 /lyric/new 另一接口所以正常）。
+                // 响应结构与旧接口一致（result.songs + songCount），上层 normalizeSongResult 直接认。
+                val formBody = "s=${enc(keywords)}&type=1&limit=$limit&offset=$offset&total=true"
+                val pcOutcome = execHttp(
+                    "POST", "$neteaseBase/api/cloudsearch/pc", neteaseReferer, headers,
+                    bodyText = formBody, cookieOverride = cookieOverride,
+                )
+                val body = if (pcOutcome.status in 200..299 && pcOutcome.body.isNotBlank()) {
+                    pcOutcome.body
+                } else {
+                    // 兜底：个别网络/部署下 POST 失败时退回旧接口（没有 picUrl，至少搜索/歌词可用）
+                    val url = "$neteaseBase/api/search/get/web?s=${enc(keywords)}&type=1&limit=$limit&offset=$offset"
+                    execHttp("GET", url, neteaseReferer, headers, cookieOverride = cookieOverride).body
+                }
+                ensureCode200(body)
             }
 
             "/lyric/new" -> {

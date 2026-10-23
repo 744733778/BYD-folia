@@ -3,6 +3,18 @@
 本文件记录 foliaAPP 安卓移植版的版本变更，版本号与 `android-folia-shell/app/build.gradle`
 的 `versionName` / `versionCode` 一一对应。前端改动同步反映在 `folia-major-0.7.20/` 子树中。
 
+## 0.1.27（versionCode 27）
+
+- **修复在线匹配封面始终不显示（真根因）**：日志实锤 `[CoverPlay] after match coverUrl=null onlineMeta.coverUrl=undefined useOnline=false`
+  ——匹配只产出歌词、从未产出封面 URL，`/fetch` 代理根本没被调用（不是下载问题）。
+  根因：安卓原生桥把 `/cloudsearch` 映射到旧接口 `/api/search/get/web`，其返回的 album 只有
+  `picId`、没有 `picUrl`（沙箱实测确认；`/api/song/detail` 才有 picUrl），于是搜索结果的封面全为空。
+- MainActivity.kt：`/cloudsearch` 改走新版 `POST /api/cloudsearch/pc`（返回 album.picUrl，
+  响应结构一致），失败时回退旧接口保底。
+- localMusicService.ts：安全网——匹配候选缺封面且为 netease 时补拉一次 `/song/detail` 取 picUrl，
+  仅缺封面时触发、正常路径零额外请求。
+- build.gradle: versionCode 27 / versionName 0.1.27。
+
 ## 0.1.26（versionCode 26）
 
 - **在线封面诊断 + 加固**：本地内嵌封面已能显示（0.1.25），但播放中无内嵌封面的歌联网匹配封面仍不出。
