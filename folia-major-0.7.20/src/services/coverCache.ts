@@ -30,7 +30,9 @@ const buildCoverRequestUrl = (coverUrl: string): string => {
         // 上才有，靠 hostname 判断可精准命中、不会误伤普通 web 部署。
         if (typeof window !== 'undefined'
             && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')) {
-            return `${window.location.origin}/fetch?url=${encodeURIComponent(coverUrl)}`;
+            const proxied = `${window.location.origin}/fetch?url=${encodeURIComponent(coverUrl)}`;
+            console.log('[Cover] proxy via /fetch:', coverUrl);
+            return proxied;
         }
         if (hostname === 'y.gtimg.cn'
             || hostname === 'kugou.com' || hostname.endsWith('.kugou.com')
@@ -44,9 +46,14 @@ const buildCoverRequestUrl = (coverUrl: string): string => {
 };
 
 const fetchCoverBlob = async (coverUrl: string): Promise<Blob> => {
-    const response = await fetch(buildCoverRequestUrl(coverUrl), { mode: 'cors' });
+    const requestUrl = buildCoverRequestUrl(coverUrl);
+    console.log('[Cover] fetch:', requestUrl);
+    const response = await fetch(requestUrl, { mode: 'cors' });
+    console.log('[Cover] response:', response.status, response.headers.get('content-type') || '(no type)');
     if (response.ok === false) throw new Error(`Cover request failed: ${response.status}`);
-    return await response.blob();
+    const blob = await response.blob();
+    console.log('[Cover] blob:', blob.size, blob.type || '(no type)');
+    return blob;
 };
 
 export async function getCachedCoverUrl(cacheKey: string): Promise<string | null> {
@@ -93,15 +100,19 @@ export async function loadCachedOrFetchCover(cacheKey: string, coverUrl?: string
     try {
         const cachedCoverUrl = await getCachedCoverUrl(cacheKey);
         if (cachedCoverUrl) {
+            console.log('[Cover] cache hit:', cacheKey);
             return cachedCoverUrl;
         }
 
+        console.log('[Cover] cache miss, downloading:', cacheKey);
         const coverBlob = await fetchCoverBlob(coverUrl);
         const descriptor = await writeCoverAsset(cacheKey, coverBlob).catch(() => null);
         if (descriptor) await saveToCache(cacheKey, descriptor);
-        return createSafeObjectUrl(coverBlob) || coverUrl;
+        const objectUrl = createSafeObjectUrl(coverBlob) || coverUrl;
+        console.log('[Cover] downloaded ok:', cacheKey, '->', objectUrl.slice(0, 48));
+        return objectUrl;
     } catch (error) {
-        console.warn('Failed to cache cover:', error);
+        console.warn('[Cover] download failed, falling back to raw url:', cacheKey, error);
         return coverUrl;
     }
 }
@@ -121,8 +132,12 @@ export async function cacheLocalSongOnlineCover(songId: string, coverUrl: string
     await removeCachedCover(cacheKey);
     try {
         const descriptor = await writeCoverAsset(cacheKey, await fetchCoverBlob(coverUrl));
-        if (!descriptor) return false;
+        if (!descriptor) {
+            console.warn('[Cover] cacheLocalSongOnlineCover: no descriptor for', cacheKey);
+            return false;
+        }
         await saveToCache(cacheKey, descriptor);
+        console.log('[Cover] cacheLocalSongOnlineCover ok:', cacheKey);
         return true;
     } catch (error) {
         console.warn('[LocalMusic] Failed to cache matched cover:', error);

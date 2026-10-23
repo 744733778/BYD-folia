@@ -3,6 +3,18 @@
 本文件记录 foliaAPP 安卓移植版的版本变更，版本号与 `android-folia-shell/app/build.gradle`
 的 `versionName` / `versionCode` 一一对应。前端改动同步反映在 `folia-major-0.7.20/` 子树中。
 
+## 0.1.26（versionCode 26）
+
+- **在线封面诊断 + 加固**：本地内嵌封面已能显示（0.1.25），但播放中无内嵌封面的歌联网匹配封面仍不出。
+  静态核查整条链路（/fetch 路由→原生下载→coverUrl 提取→持久化→显示）每一环均正常，且实测网易/QQ
+  封面仅 UA 即可下到（200/JPEG），故怀疑为运行时问题。本版不盲改，先加可观测性 + 健壮性：
+- LocalHttpServer `/fetch`：加 logcat 日志（tag `CoverFetch`：GET/OK/FAIL/NOT-IMAGE + 字节数），
+  **魔数校验**（认不出 JPEG/PNG/WebP/GIF 直接 502，杜绝把 CDN 403/错误页当封面缓存→整片灰），
+  并按 host 补 **Referer 重试**（网易/QQ/酷狗图片域偶发校验来源，抄 APlayer 的下载健壮性）。
+- 前端 `[Cover]`/`[CoverPlay]` 诊断日志：debug 构建经 `consoleOutput(true)` 已进 logcat（tag GeckoConsole），
+  打印代理路由、/fetch 响应码、blob 大小、播放初始/匹配后封面 URL 与 useOnlineCover 状态。
+- 目标：用户抓一次 logcat 即可定位在线封面断在哪一环（匹配没出 coverUrl / /fetch 502 / 显示没接上）。
+
 ## 0.1.25（versionCode 25）
 
 - **封面核心缺口修复（抄 APlayer 的 EmbeddedFetcher）**：folia 媒体模式此前只认目录 cover.jpg 和

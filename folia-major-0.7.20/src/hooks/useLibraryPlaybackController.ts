@@ -627,6 +627,10 @@ export function useLibraryPlaybackController({
         setCurrentSong(initialMeta.unifiedSong);
         setAudioSrc(playbackUrl);
 
+        console.log('[CoverPlay] initial coverUrl=', initialMeta.coverUrl,
+            'native=', preparedLocalSong.nativeCoverUrl,
+            'assetId=', preparedLocalSong.localCoverAssetId,
+            'useOnline=', preparedLocalSong.useOnlineCover);
         if (initialMeta.coverUrl) {
             loadCachedOrFetchCover(`cover_local_${preparedLocalSong.id}`, initialMeta.coverUrl).then((resolvedCoverUrl) => {
                 if (currentSongRef.current === initialSongKey) {
@@ -678,6 +682,10 @@ export function useLibraryPlaybackController({
                 setActiveLocalLyricsSource(updatedMeta.lyricsSource);
                 setIsLyricsLoading(false);
 
+                console.log('[CoverPlay] after match coverUrl=', updatedMeta.coverUrl,
+                    'onlineMeta.coverUrl=', updatedLocalSong.onlineMetadata?.coverUrl,
+                    'useOnline=', updatedLocalSong.useOnlineCover,
+                    'native=', updatedLocalSong.nativeCoverUrl);
                 if (updatedMeta.coverUrl && updatedMeta.coverUrl !== initialMeta.coverUrl) {
                     loadCachedOrFetchCover(`cover_local_${updatedLocalSong.id}`, updatedMeta.coverUrl).then((resolvedCoverUrl) => {
                         if (currentSongRef.current === initialSongKey) {

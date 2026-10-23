@@ -428,6 +428,63 @@ class LocalHttpServer(private val context: Context) {
      * fetch 直接失败——这正是 0.1.22/0.1.23 自动匹配封面整片缺失的根因）。
      * 仅放行 http/https，响应 ≤ FETCH_MAX_BYTES，避免被滥用。
      */
+    /** 按 CDN host 给 Referer：网易/QQ/酷狗的图片域部分会校验来源，裸 UA 偶发 403。 */
+    private fun refererFor(url: java.net.URL): String? = when {
+        url.host.endsWith("163.com") -> "https://music.163.com/"
+        url.host.endsWith("gtimg.cn") || url.host.endsWith("qq.com") -> "https://y.qq.com/"
+        url.host.endsWith("kugou.com") || url.host.endsWith("kgimg.com") -> "http://www.kugou.com/"
+        else -> null
+    }
+
+    /** 依据文件头魔数识别图片类型；认不出返回 null（用于拦掉 CDN 的错误页/HTML）。 */
+    private fun imageMagic(b: ByteArray): String? = when {
+        b.size >= 3 && b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte() && b[2] == 0xFF.toByte() -> "image/jpeg"
+        b.size >= 8 && b[0] == 0x89.toByte() && b[1] == 0x50.toByte() && b[2] == 0x4E.toByte() && b[3] == 0x47.toByte() -> "image/png"
+        b.size >= 12 && b[0] == 0x52.toByte() && b[1] == 0x49.toByte() && b[2] == 0x46.toByte() && b[3] == 0x46.toByte()
+            && b[8] == 0x57.toByte() && b[9] == 0x45.toByte() && b[10] == 0x42.toByte() && b[11] == 0x50.toByte() -> "image/webp"
+        b.size >= 6 && b[0] == 0x47.toByte() && b[1] == 0x49.toByte() && b[2] == 0x46.toByte() -> "image/gif"
+        else -> null
+    }
+
+    /** 单次抓取：返回 (httpCode, contentType, bytes)；失败/非 2xx/超大时 bytes 为 null。 */
+    private fun fetchImageOnce(url: java.net.URL, referer: String?): Triple<Int, String?, ByteArray?> {
+        return try {
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 10000
+            conn.readTimeout = 20000
+            conn.instanceFollowRedirects = true
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) Folia/0.1")
+            conn.setRequestProperty("Accept", "image/*,*/*")
+            if (referer != null) conn.setRequestProperty("Referer", referer)
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                conn.disconnect()
+                return Triple(code, conn.contentType, null)
+            }
+            val type = conn.contentType
+            val inp = conn.inputStream
+            val maxBytes = 8 * 1024 * 1024
+            val baos = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                val n = inp.read(buf)
+                if (n <= 0) break
+                total += n
+                if (total > maxBytes) {
+                    inp.close(); conn.disconnect()
+                    return Triple(code, type, null)
+                }
+                baos.write(buf, 0, n)
+            }
+            inp.close(); conn.disconnect()
+            Triple(code, type, baos.toByteArray())
+        } catch (_: Exception) {
+            Triple(-1, null, null)
+        }
+    }
+
     private fun handleFetch(socket: Socket, target: String) {
         val urlStr = queryParam(target, "url")
         if (urlStr.isNullOrEmpty()) {
@@ -444,47 +501,29 @@ class LocalHttpServer(private val context: Context) {
             respond(socket, 400, "text/plain", "unsupported scheme".toByteArray())
             return
         }
-        try {
-            val conn = u.openConnection() as java.net.HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.connectTimeout = 10000
-            conn.readTimeout = 20000
-            conn.instanceFollowRedirects = true
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) Folia/0.1")
-            conn.setRequestProperty("Accept", "image/*,*/*")
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                conn.disconnect()
-                respond(socket, 502, "text/plain", "upstream $code".toByteArray())
-                return
-            }
-            val type = conn.contentType ?: "image/*"
-            val inp = conn.inputStream
-            val maxBytes = 8 * 1024 * 1024
-            val baos = java.io.ByteArrayOutputStream()
-            val buf = ByteArray(64 * 1024)
-            var total = 0L
-            while (true) {
-                val n = inp.read(buf)
-                if (n <= 0) break
-                total += n
-                if (total > maxBytes) {
-                    inp.close()
-                    conn.disconnect()
-                    respond(socket, 502, "text/plain", "too large".toByteArray())
-                    return
-                }
-                baos.write(buf, 0, n)
-            }
-            inp.close()
-            conn.disconnect()
-            respond(socket, 200, type, baos.toByteArray())
-        } catch (_: Exception) {
-            try {
-                respond(socket, 502, "text/plain", "fetch failed".toByteArray())
-            } catch (_: Exception) {
-            }
+        android.util.Log.d("CoverFetch", "GET $urlStr")
+        val referer = refererFor(u)
+        var result = fetchImageOnce(u, null)
+        // 首次（仅 UA）没拿到图且该 host 有约定 Referer 时，带 Referer 再试一次——APlayer 的下载就是这么下的。
+        if (result.third == null && referer != null) {
+            android.util.Log.d("CoverFetch", "retry Referer=$referer (firstCode=${result.first})")
+            result = fetchImageOnce(u, referer)
         }
+        val bytes = result.third
+        if (bytes == null) {
+            android.util.Log.w("CoverFetch", "FAIL $urlStr code=${result.first}")
+            respond(socket, 502, "text/plain", "upstream ${result.first}".toByteArray())
+            return
+        }
+        val magic = imageMagic(bytes)
+        if (magic == null) {
+            // 认不出文件头：多半是 CDN 的 403/错误页被当成 200 回了。别把它当封面缓存，否则前端整片灰。
+            android.util.Log.w("CoverFetch", "NOT-IMAGE $urlStr bytes=${bytes.size} type=${result.second}")
+            respond(socket, 502, "text/plain", "not an image".toByteArray())
+            return
+        }
+        android.util.Log.d("CoverFetch", "OK $urlStr bytes=${bytes.size} type=$magic")
+        respond(socket, 200, magic, bytes)
     }
 
     // ==================== 响应工具 ====================
