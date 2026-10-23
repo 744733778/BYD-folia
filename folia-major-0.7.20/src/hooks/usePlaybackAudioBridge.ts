@@ -245,10 +245,21 @@ export function usePlaybackAudioBridge({
     // 产生的事件是真的。换算过来，方向盘滚轮就能调软件增益——否则 fixed 车上实体按键全死。
     // 系统真可调时（systemGoverns）不映射：那会导致系统与网页双重调节（音量被平方）。
     const lastMappedSystemVolumeRef = useRef<number | null>(null);
+    const wheelMappingLoggedRef = useRef(false);
     useEffect(() => {
         if (!isNativeAndroidShell() || systemGovernsNow) {
+            if (isNativeAndroidShell() && wheelMappingLoggedRef.current) {
+                // 车机排查口：这行出现 = 滚轮事件被判定为"系统在管"而不换算。
+                // 滚轮动了却只有 [CarKeys] 事件、没有下面 wheel 行，就是这个原因。
+                console.log('[Volume] wheel mapping inactive (system governs)');
+                wheelMappingLoggedRef.current = false;
+            }
             lastMappedSystemVolumeRef.current = null;
             return;
+        }
+        if (!wheelMappingLoggedRef.current) {
+            console.log('[Volume] wheel mapping active (web governs; wheel turns adjust in-app volume)');
+            wheelMappingLoggedRef.current = true;
         }
         return onNativeSystemEvent((method, payload) => {
             if (method !== 'volume') return;
@@ -263,6 +274,7 @@ export function usePlaybackAudioBridge({
             const store = useAudioSettingsStore.getState();
             const next = Math.min(1, Math.max(MIN_SOFT_VOLUME, store.volume + delta));
             store.handleSetVolume(next);
+            console.log(`[Volume] wheel Δ${delta >= 0 ? '+' : ''}${delta.toFixed(3)} → app=${next.toFixed(3)}`);
         });
     }, [systemGovernsNow]);
 

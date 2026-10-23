@@ -40,12 +40,19 @@ object VolumeMode {
         // 调试钩子：`adb shell setprop debug.folia.fixedvolume 1` 强制按固定音量处理（进程重启生效）。
         // 作用是把车机那条路（自建软件增益 + 会话 remote volume）搬到模拟器/可调机型上验证，
         // 免得每次都要装车才知道 provider 有没有被回调。正式包不设这个属性时完全无副作用。
-        readSystemProperty("debug.folia.fixedvolume")?.let { forced ->
-            val mode = if (forced == "1" || forced.equals("true", ignoreCase = true)) FIXED else ADJUSTABLE
-            Log.d(TAG, "resolved=$mode (debug.folia.fixedvolume=$forced)")
-            cached = mode
-            return mode
-        }
+        //
+        // 0.1.22 车机实测教训：SystemProperties.get(key) 的**单参版本对未设置的键返回 ""
+        // 而不是 null**，于是 `?.let` 恒成立、forced="" → 判成 ADJUSTABLE——OEM 白名单、
+        // UiModeManager、automotive 检测全部沦为死代码，DiLink 上永远走不到 fixed。
+        // 必须把空白串视为"未设置"，钩子只在属性真的有值时才生效。
+        readSystemProperty("debug.folia.fixedvolume")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { forced ->
+                val mode = if (forced == "1" || forced.equals("true", ignoreCase = true)) FIXED else ADJUSTABLE
+                Log.d(TAG, "resolved=$mode (debug.folia.fixedvolume=$forced)")
+                cached = mode
+                return mode
+            }
         val mode = try {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             when {
@@ -137,7 +144,7 @@ object VolumeMode {
             .joinToString(" ")
             .lowercase()
 
-    /** 读 `debug.*` 系统属性（隐藏 API 反射；失败一律当没设）。 */
+    /** 读 `debug.*` 系统属性（隐藏 API 反射）。注意：未设置时单参 get 返回 ""，由调用方 takeIf 过滤。 */
     private fun readSystemProperty(key: String): String? = try {
         Class.forName("android.os.SystemProperties")
             .getMethod("get", String::class.java)

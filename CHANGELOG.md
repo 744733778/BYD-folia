@@ -3,6 +3,28 @@
 本文件记录 foliaAPP 安卓移植版的版本变更，版本号与 `android-folia-shell/app/build.gradle`
 的 `versionName` / `versionCode` 一一对应。前端改动同步反映在 `folia-major-0.7.20/` 子树中。
 
+## 0.1.22（versionCode 22）
+
+- **修复车机音量滚轮/滑杆仍无效（手动切软件增益才出声）**：根因是 `VolumeMode.kt` 的调试钩子
+  `SystemProperties.get(key)` 对未设置的键返回 `""` 而非 `null`，导致 `?.let` 恒成立、把车机
+  强制判成 `adjustable`，OEM 白名单 / UiModeManager=CAR / automotive 特性检测全部沦为死代码，
+  DiLink 上永远走不到 fixed。车机一旦被误判 adjustable，`systemGoverns=true` 就**关闭了网页层
+  的滚轮映射**，实体滚轮和滑杆当然都没反应。修正为 `?.takeIf { it.isNotBlank() }`，空白串视为
+  「未设置」；车机现在正确判成 fixed，网页接管音量、滚轮映射自动激活——无需再手动切软件增益。
+- `usePlaybackAudioBridge.ts` 新增滚轮映射诊断日志（`wheel mapping active/inactive` 与每次
+  调整的 `wheel Δ±x.xxx → app=y.yyy`），方便车机无 adb 时从会话日志确认滚轮是否真的在调 APP 音量。
+- **封面匹配大幅提速（抄 APlayer 思路，本地零网络）**：`MediaLibrary.kt` 在扫描时读取
+  `MediaStore.Audio.Media.ALBUM_ID`，无目录封面时用系统已缓存的专辑图
+  `content://media/external/audio/albumart/<id>` 作为 `coverUri` 兜底。绝大多数字有标签的音乐
+  因此在扫描阶段就拿到了**本地封面**，经壳层 `LocalHttpServer /cover?uri=...` 即时出图，
+  不再依赖慢速在线匹配。
+- 修正 `hasLocalSongCover()`：原先只认 `localCoverAssetId`，漏掉了原生/目录/专辑图封面
+  （`nativeCoverUrl`），导致车机上明明有本地图的歌在首次播放时仍要去等一次在线搜索——这正是
+  「很久匹配不到正在播放的」主要来源之一。现在 `nativeCoverUrl` 也算本地封面，命中即跳过在线匹配。
+- 说明：专辑图是在**扫描时**写入快照的，旧库需要重新扫描一次才能补齐；重新扫后音乐墙与正在
+  播放的封面都会即时显示。正在播放优先、其次音乐墙可见的匹配顺序本就由播放管线保证
+  （播放即异步匹配、队列邻居预取），专辑图兜底后长尾（无标签/无专辑图）才走在线匹配。
+
 ## 0.1.21（versionCode 21）
 
 - **修复车机音量全失效（恒最大声）**：根因是 `getVolumeMode()` 返回 `null`（车机持久化旧版桥扩展

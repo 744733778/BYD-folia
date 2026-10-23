@@ -130,6 +130,7 @@ class MediaLibrary(private val context: Context) {
                 val titleI = c.getColumnIndex(MediaStore.Audio.Media.TITLE)
                 val artistI = c.getColumnIndex(MediaStore.Audio.Media.ARTIST)
                 val albumI = c.getColumnIndex(MediaStore.Audio.Media.ALBUM)
+                val albumIdI = c.getColumnIndex(MediaStore.Audio.Media.ALBUM_ID)
                 val durI = c.getColumnIndex(MediaStore.Audio.Media.DURATION)
                 val volI = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                     c.getColumnIndex(MediaStore.Audio.Media.VOLUME_NAME) else -1
@@ -181,6 +182,15 @@ class MediaLibrary(private val context: Context) {
                         sidecarFor(dataPath)?.let { o.put("sidecarPath", it) }
                     }
                     folders[folderRel]?.let { o.put("coverUri", it) }
+                    // 专辑图兜底（抄 APlayer 的快）：目录没有 cover.jpg 时用 MediaStore 的专辑图。
+                    // 系统媒体库早就把每张专辑的封面抽出来缓存好了（albumart provider），按
+                    // albumId 拼 content uri 让 LocalHttpServer /cover 出图即可——本地读缓存，
+                    // 零网络，音乐墙/播放页瞬间有图，不必再走慢速在线匹配。专辑真没图时
+                    // openInputStream 会抛错、/cover 返回 500，前端照常落到占位图。
+                    if (!o.has("coverUri") && albumIdI >= 0) {
+                        val albumId = c.getLong(albumIdI)
+                        if (albumId > 0L) o.put("coverUri", albumArtUri(albumId).toString())
+                    }
                     files.put(o)
                     count++
                 }
@@ -219,6 +229,10 @@ class MediaLibrary(private val context: Context) {
         return ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
     }
 
+    /** MediaStore 专辑图（系统已缓存）：/cover 端点可直接 openInputStream 出图。 */
+    private fun albumArtUri(albumId: Long): Uri =
+        ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
+
     private fun audioProjection(): Array<String> {
         val base = mutableListOf(
             MediaStore.Audio.Media._ID,
@@ -229,6 +243,7 @@ class MediaLibrary(private val context: Context) {
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.ALBUM,
+            MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.DURATION
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
