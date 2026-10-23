@@ -8,6 +8,8 @@ import android.provider.MediaStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import android.media.MediaMetadataRetriever
+import java.security.MessageDigest
 
 /**
  * 本地曲库索引：系统媒体扫描器（MediaStore）是唯一来源。
@@ -183,17 +185,24 @@ class MediaLibrary(private val context: Context) {
                         sidecarFor(dataPath)?.let { o.put("sidecarPath", it) }
                     }
                     folders[folderRel]?.let { o.put("coverUri", it) }
-                    // 专辑图兜底（抄 APlayer 的快）：目录没有 cover.jpg 时用 MediaStore 的专辑图。
-                    // 系统媒体库早就把每张专辑的封面抽出来缓存好了（albumart provider），按
-                    // albumId 拼 content uri 让 LocalHttpServer /cover 出图即可——本地读缓存，
-                    // 零网络，音乐墙/播放页瞬间有图，不必再走慢速在线匹配。
-                    // 但 album_id 对"无内嵌封面"的歌也照样 >0，必须实测该 albumart URI 能否取到
-                    // 字节，否则会把一个打不开的 URI 写进 coverUri：前端按"有本地封面"跳过在线
-                    // 匹配，结果整片灰且无兜底（0.1.22 踩过的坑：模拟器/无图专辑全灰）。
-                    if (!o.has("coverUri") && albumIdI >= 0) {
-                        val albumId = c.getLong(albumIdI)
-                        if (albumId > 0L && albumArtExists(albumId, albumArtCache)) {
-                            o.put("coverUri", albumArtUri(albumId).toString())
+                    // 内嵌封面（抄 APlayer 的 EmbeddedFetcher / MediaMetadataRetriever.embeddedPicture）：
+                    // folia 媒体模式此前只认目录 cover.jpg + MediaStore 专辑图，绝大多数"封面内嵌在音频文件里"
+                    // 的歌（占曲库绝大多数）直接被无视——这才是"大部分没封面"真正的核心缺口。
+                    // 这里用系统 MTR 直接从音频文件抠内嵌图，写入缓存文件并给 file:// URI，经 /cover 同源
+                    // 出图，离线零网络、对绝大多数有标签的歌都有效。
+                    // 只在确实取到字节时才写 coverUri：这样既修了大半的封面，又不会重蹈 0.1.22 的坑
+                    // （那时盲写 coverUri 导致前端按"有本地封面"跳过在线兜底、整片灰）。
+                    // 取不到内嵌图（无图歌曲）则保持 coverUri 为空，让在线匹配仍可用。
+                    if (!o.has("coverUri")) {
+                        val emb = embeddedCoverUri(contentUri, size, modified)
+                        if (emb != null) {
+                            o.put("coverUri", emb)
+                        } else if (albumIdI >= 0) {
+                            // 没内嵌图：退回 MediaStore 专辑图（系统已缓存），同样要实测可取字节。
+                            val albumId = c.getLong(albumIdI)
+                            if (albumId > 0L && albumArtExists(albumId, albumArtCache)) {
+                                o.put("coverUri", albumArtUri(albumId).toString())
+                            }
                         }
                     }
                     files.put(o)
@@ -255,6 +264,48 @@ class MediaLibrary(private val context: Context) {
         }
         cache[albumId] = exists
         return exists
+    }
+
+    /**
+     * 抽取音频文件的内嵌封面（embeddedPicture），写进缓存文件并返回 file:// URI；
+     * 取不到（文件无内嵌图 / 解码失败）返回 null，且不写 coverUri，让在线匹配兜底。
+     *
+     * 与 APlayer 的 EmbeddedFetcher 同思路：MediaMetadataRetriever 是系统级、离线、零网络，
+     * 对 MP3/FLAC/M4A 等主流格式的内嵌 APIC 图都能直接抠出。缓存按 (音频contentUri + 大小 +
+     * 修改时间) 做键：首次扫描逐文件 MTR 探测（io 线程，不卡 UI），结果落盘，重扫瞬间完成；
+     * 音频文件变更后哈希变化自动重新探测。无图歌曲用同键的 .none 哨兵文件避免每次重扫都重探。
+     */
+    private fun embeddedCoverUri(audioContentUri: String, size: Long, modified: Long): String? {
+        val dir = File(context.cacheDir, "folia_cover")
+        if (!dir.exists()) dir.mkdirs()
+        val key = sha1Hex("$audioContentUri|$size|$modified")
+        val jpg = File(dir, "$key.jpg")
+        if (jpg.exists() && jpg.length() > 0L) return "file://" + jpg.absolutePath
+        val none = File(dir, "$key.none")
+        if (none.exists()) return null
+        val mmr = MediaMetadataRetriever()
+        return try {
+            mmr.setDataSource(context, Uri.parse(audioContentUri))
+            val bytes = mmr.embeddedPicture
+            if (bytes != null && bytes.isNotEmpty()) {
+                jpg.writeBytes(bytes)
+                "file://" + jpg.absolutePath
+            } else {
+                none.createNewFile()
+                null
+            }
+        } catch (_: Exception) {
+            none.createNewFile()
+            null
+        } finally {
+            try { mmr.release() } catch (_: Exception) {}
+        }
+    }
+
+    private fun sha1Hex(input: String): String {
+        val md = MessageDigest.getInstance("SHA-1")
+        md.update(input.toByteArray(Charsets.UTF_8))
+        return md.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun audioProjection(): Array<String> {

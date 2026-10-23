@@ -3,6 +3,19 @@
 本文件记录 foliaAPP 安卓移植版的版本变更，版本号与 `android-folia-shell/app/build.gradle`
 的 `versionName` / `versionCode` 一一对应。前端改动同步反映在 `folia-major-0.7.20/` 子树中。
 
+## 0.1.25（versionCode 25）
+
+- **封面核心缺口修复（抄 APlayer 的 EmbeddedFetcher）**：folia 媒体模式此前只认目录 cover.jpg 和
+  MediaStore 专辑图，完全不读音频文件**内嵌封面**——而绝大多数歌的封面正是内嵌在文件里的，
+  这才是"大部分没封面"真正的核心原因（之前的专辑图兜底/CORS 代理都在外围打转）。
+- MediaLibrary.kt：扫描每首歌时用 `MediaMetadataRetriever.embeddedPicture` 直接从音频文件抠内嵌图，
+  写缓存文件给 `file://` URI，经现有 `/cover` 同源出图（离线零网络）。
+- 关键防护：**只在确实取到字节时才写 coverUri**，无内嵌图的歌保持 coverUri 为空 → 在线匹配仍可用，
+  彻底绕开 0.1.22 那种"盲写 coverUri 导致跳过在线兜底、整片灰"的坑。
+- 缓存按 (音频contentUri+大小+修改时间) 做键，首次扫描逐文件探测（io 线程不卡 UI），重扫瞬间完成；
+  无图歌曲用 .none 哨兵避免重复探测。
+- build.gradle: versionCode 25 / versionName 0.1.25。
+
 ## 0.1.24（versionCode 24）
 
 - 修复自动匹配封面整片缺失（下载问题，非匹配速度）。安卓壳里 coverCache 用浏览器 fetch 直抓
