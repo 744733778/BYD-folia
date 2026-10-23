@@ -11,8 +11,8 @@ android {
         applicationId "com.foliaapp.android"
         minSdk 26          // 覆盖绝大多数 Android 8.0+ 设备
         targetSdk 36
-        versionCode 23
-        versionName "0.1.23"
+        versionCode 24
+        versionName "0.1.24"
         ndk {
             abiFilters 'arm64-v8a'   // 车机 arm64-only 实测包
         }

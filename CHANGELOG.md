@@ -3,6 +3,16 @@
 本文件记录 foliaAPP 安卓移植版的版本变更，版本号与 `android-folia-shell/app/build.gradle`
 的 `versionName` / `versionCode` 一一对应。前端改动同步反映在 `folia-major-0.7.20/` 子树中。
 
+## 0.1.24（versionCode 24）
+
+- 修复自动匹配封面整片缺失（下载问题，非匹配速度）。安卓壳里 coverCache 用浏览器 fetch 直抓
+  外部封面 CDN，而网易/QQ/酷狗封面 CDN 普遍不带 CORS 头，webview fetch 直接失败；歌词走原生桥
+  服务端抓取所以秒到，封面却拿不到——这就是"歌词立刻到位、封面始终不见"的根因。
+  - LocalHttpServer 新增同源 `/fetch?url=` 代理端点：原生 HttpURLConnection 代抓图片、同源回传，
+    绕开 webview CORS；仅放行 http/https、响应 ≤ 8MB。
+  - coverCache.buildCoverRequestUrl：前端由 127.0.0.1 同源加载时，所有封面下载改走 `/fetch` 代理
+    （不再裸 fetch 跨源），Electron 与常规 web 部署行为不变。
+
 ## 0.1.23（versionCode 23）
 
 - **修复 0.1.22 封面整片灰（回归）**：`MediaLibrary.kt` 的专辑图兜底误判——`album_id` 对"无内嵌封面"

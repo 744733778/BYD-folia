@@ -24,6 +24,14 @@ const buildCoverRequestUrl = (coverUrl: string): string => {
     if (typeof window !== 'undefined' && window.electron) return coverUrl;
     try {
         const hostname = new URL(coverUrl).hostname;
+        // 安卓壳：前端从 LocalHttpServer（127.0.0.1）同源加载，经同源 /fetch 代理出图，
+        // 绕开 webview 的 CORS 限制（网易/QQ/酷狗封面 CDN 普遍不带 CORS 头，浏览器 fetch
+        // 直接失败——这正是自动匹配封面整片缺失的根因）。该端点只在我们自己的 LocalHttpServer
+        // 上才有，靠 hostname 判断可精准命中、不会误伤普通 web 部署。
+        if (typeof window !== 'undefined'
+            && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')) {
+            return `${window.location.origin}/fetch?url=${encodeURIComponent(coverUrl)}`;
+        }
         if (hostname === 'y.gtimg.cn'
             || hostname === 'kugou.com' || hostname.endsWith('.kugou.com')
             || hostname === 'kgimg.com' || hostname.endsWith('.kgimg.com')) {

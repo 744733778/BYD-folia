@@ -160,6 +160,10 @@ class LocalHttpServer(private val context: Context) {
                     handleLocal(socket, target, headers["range"], headOnly)
                     return
                 }
+                "/fetch" -> {
+                    handleFetch(socket, target)
+                    return
+                }
             }
 
             val rel = path.removePrefix("/")
@@ -412,6 +416,75 @@ class LocalHttpServer(private val context: Context) {
         "bmp" -> "image/bmp"
         "gif" -> "image/gif"
         else -> "image/*"
+    }
+
+    // ==================== /fetch：同源图片代理（封面下载走原生 HttpURLConnection，绕开 webview CORS） ====================
+
+    /**
+     * GET /fetch?url=<http(s)://...>：服务端代抓任意 http(s) 图片并同源回传。
+     *
+     * 安卓壳里前端从 127.0.0.1 同源加载，经此端点出图既绕开 webview 的 CORS 限制，
+     * 也不必把封面 URL 当跨源 fetch（网易/QQ/酷狗封面 CDN 普遍不带 CORS 头，浏览器
+     * fetch 直接失败——这正是 0.1.22/0.1.23 自动匹配封面整片缺失的根因）。
+     * 仅放行 http/https，响应 ≤ FETCH_MAX_BYTES，避免被滥用。
+     */
+    private fun handleFetch(socket: Socket, target: String) {
+        val urlStr = queryParam(target, "url")
+        if (urlStr.isNullOrEmpty()) {
+            respond(socket, 400, "text/plain", "missing url".toByteArray())
+            return
+        }
+        val u = try {
+            java.net.URL(urlStr)
+        } catch (_: Exception) {
+            respond(socket, 400, "text/plain", "bad url".toByteArray())
+            return
+        }
+        if (u.protocol != "http" && u.protocol != "https") {
+            respond(socket, 400, "text/plain", "unsupported scheme".toByteArray())
+            return
+        }
+        try {
+            val conn = u.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 10000
+            conn.readTimeout = 20000
+            conn.instanceFollowRedirects = true
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) Folia/0.1")
+            conn.setRequestProperty("Accept", "image/*,*/*")
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                conn.disconnect()
+                respond(socket, 502, "text/plain", "upstream $code".toByteArray())
+                return
+            }
+            val type = conn.contentType ?: "image/*"
+            val inp = conn.inputStream
+            val maxBytes = 8 * 1024 * 1024
+            val baos = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                val n = inp.read(buf)
+                if (n <= 0) break
+                total += n
+                if (total > maxBytes) {
+                    inp.close()
+                    conn.disconnect()
+                    respond(socket, 502, "text/plain", "too large".toByteArray())
+                    return
+                }
+                baos.write(buf, 0, n)
+            }
+            inp.close()
+            conn.disconnect()
+            respond(socket, 200, type, baos.toByteArray())
+        } catch (_: Exception) {
+            try {
+                respond(socket, 502, "text/plain", "fetch failed".toByteArray())
+            } catch (_: Exception) {
+            }
+        }
     }
 
     // ==================== 响应工具 ====================
