@@ -3,6 +3,15 @@
 本文件记录 foliaAPP 安卓移植版的版本变更，版本号与 `android-folia-shell/app/build.gradle`
 的 `versionName` / `versionCode` 一一对应。前端改动同步反映在 `folia-major-0.7.20/` 子树中。
 
+## 0.1.23（versionCode 23）
+
+- **修复 0.1.22 封面整片灰（回归）**：`MediaLibrary.kt` 的专辑图兜底误判——`album_id` 对"无内嵌封面"
+  的歌也照样 `>0`，于是给**所有**歌都写了 `content://.../albumart/<id>` 这个 URI；没图的专辑该 URI
+  打开是空、`/cover` 出图失败变灰，而且 `hasLocalSongCover()` 现在认 `nativeCoverUrl` 会据此**跳过在线
+  匹配**，结果整片灰且无兜底（模拟器里尤其明显，测试曲大多无内嵌图）。修正：新增 `albumArtExists()`，
+  写入前用 `openInputStream` 实测该 albumart URI 能否取到字节，按 `albumId` 缓存（同专辑只探测一次）；
+  没图的专辑不再写 `coverUri`，回退到在线匹配。有图专辑仍享受零网络瞬时封面。
+
 ## 0.1.22（versionCode 22）
 
 - **修复车机音量滚轮/滑杆仍无效（手动切软件增益才出声）**：根因是 `VolumeMode.kt` 的调试钩子

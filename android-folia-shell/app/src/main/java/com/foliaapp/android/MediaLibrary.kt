@@ -112,6 +112,7 @@ class MediaLibrary(private val context: Context) {
         val audioBase = audioCollection()
         val files = JSONArray()
         val folders = LinkedHashMap<String, String>() // folder -> 目录封面 content uri
+        val albumArtCache = HashMap<Long, Boolean>() // albumId -> 该专辑是否真有图（同专辑多首歌共享，避免每首开流探测）
         var maxModified = 0L
         var count = 0
 
@@ -185,11 +186,15 @@ class MediaLibrary(private val context: Context) {
                     // 专辑图兜底（抄 APlayer 的快）：目录没有 cover.jpg 时用 MediaStore 的专辑图。
                     // 系统媒体库早就把每张专辑的封面抽出来缓存好了（albumart provider），按
                     // albumId 拼 content uri 让 LocalHttpServer /cover 出图即可——本地读缓存，
-                    // 零网络，音乐墙/播放页瞬间有图，不必再走慢速在线匹配。专辑真没图时
-                    // openInputStream 会抛错、/cover 返回 500，前端照常落到占位图。
+                    // 零网络，音乐墙/播放页瞬间有图，不必再走慢速在线匹配。
+                    // 但 album_id 对"无内嵌封面"的歌也照样 >0，必须实测该 albumart URI 能否取到
+                    // 字节，否则会把一个打不开的 URI 写进 coverUri：前端按"有本地封面"跳过在线
+                    // 匹配，结果整片灰且无兜底（0.1.22 踩过的坑：模拟器/无图专辑全灰）。
                     if (!o.has("coverUri") && albumIdI >= 0) {
                         val albumId = c.getLong(albumIdI)
-                        if (albumId > 0L) o.put("coverUri", albumArtUri(albumId).toString())
+                        if (albumId > 0L && albumArtExists(albumId, albumArtCache)) {
+                            o.put("coverUri", albumArtUri(albumId).toString())
+                        }
                     }
                     files.put(o)
                     count++
@@ -232,6 +237,25 @@ class MediaLibrary(private val context: Context) {
     /** MediaStore 专辑图（系统已缓存）：/cover 端点可直接 openInputStream 出图。 */
     private fun albumArtUri(albumId: Long): Uri =
         ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
+
+    /**
+     * 实测该 albumId 是否真的有专辑图。MediaStore 给每个音频文件都分配了 album_id（哪怕
+     * 没有内嵌封面），所以光看 album_id>0 不足以判断有图；必须尝试 openInputStream 并确认
+     * 至少能读到一个字节。结果按 albumId 缓存，同一专辑的多首歌只探测一次。
+     */
+    private fun albumArtExists(albumId: Long, cache: MutableMap<Long, Boolean>): Boolean {
+        cache[albumId]?.let { return it }
+        var exists = false
+        try {
+            context.contentResolver.openInputStream(albumArtUri(albumId))?.use { ist ->
+                exists = ist.read() != -1
+            }
+        } catch (_: Exception) {
+            exists = false
+        }
+        cache[albumId] = exists
+        return exists
+    }
 
     private fun audioProjection(): Array<String> {
         val base = mutableListOf(
