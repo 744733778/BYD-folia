@@ -3,6 +3,22 @@
 本文件记录 foliaAPP 安卓移植版的版本变更，版本号与 `android-folia-shell/app/build.gradle`
 的 `versionName` / `versionCode` 一一对应。前端改动同步反映在 `folia-major-0.7.20/` 子树中。
 
+## 0.1.21（versionCode 21）
+
+- **修复车机音量全失效（恒最大声）**：根因是 `getVolumeMode()` 返回 `null`（车机持久化旧版桥扩展
+  缺该方法 / 冷启动竞争）被前端当成 `adjustable` 写死，导致 `systemGoverns=true`、网页增益钉死 1、
+  滑杆与实体音量键全部无效。新模块 `src/utils/nativeVolumeMode.ts` 统一解析：重试 + **null 永不写死
+  adjustable** + 用户覆盖项；`systemVolumeGoverns()` 判据收敛到「原生壳 + 非 fixed + 系统档位 <0.999」
+- `usePlaybackAudioBridge.ts` / `App.tsx` 改用统一决策；fixed / 未知模式下把滚轮 `volume` 事件
+  映射为应用内档位（0.02 步长 + 防抖），让没有系统音量的车机也能用方向盘滚轮调 APP 音量
+- `VolumeMode.kt` 增强判定：增 `UI_MODE_TYPE_CAR`（UiModeManager）与 `android.hardware.type.automotive`
+  特性检测，`describe()` 输出判定依据，便于车机排查
+- **桥扩展 `manifest.json` 2.0 → 2.1**：强制车机重装持久化的旧版扩展，根治缺 `getVolumeMode` 的
+  旧扩展导致的判定失效
+- **开发者选项新增「音量模式」卡片**（仅原生壳）：显示检测/生效状态 + 自动/软件增益/系统音量三选一
+  覆盖，作为车机无 adb 时的自救入口；`volume` 系统事件接入会话日志
+- 三语言 i18n 新增音量模式词条；单测 `nativeVolumeMode.test.ts` 11/11 通过，`tsc --noEmit` 零错误
+
 ## 0.1.20（versionCode 20）
 
 - **移除「思索」（Ponder）帮助系统**：整个 PC 向帮助/提示链路约 16.8k 行随组件目录、

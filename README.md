@@ -2,7 +2,7 @@
 
 Folia 音乐播放器的**安卓移植版**，自带浏览器内核（**GeckoView** / Firefox 引擎），不依赖车机/低版本系统 WebView——炫酷可视化、现代 CSS/WebGL 特效在低版本 Android 车机上也能跑。
 
-当前版本：**0.1.20（versionCode 20）** · 变更记录见 [CHANGELOG.md](CHANGELOG.md)
+当前版本：**0.1.21（versionCode 21）** · 变更记录见 [CHANGELOG.md](CHANGELOG.md)
 
 > 早期基于 Capacitor/系统 WebView 的方案已废弃（车机 WebView 版本太低），统一为「GeckoView 内嵌内核 + WebExtension 消息桥 + 本地 HTTP 服务」架构。
 
@@ -136,6 +136,7 @@ adb logcat -s foliaAPP MediaLibrary LocalHttpServer PlaybackService VolumeMode
 - 播放无声：确认 `/local` 返回 200/206 且 `Content-Type` 是 `audio/*`
 - 按键无效：`foliaAPP` 日志里应有 `native port connected`；`dispatchKeyEvent` 已消费媒体键，不会再传给 Gecko
 - 音量异常：`VolumeMode` 日志有 `resolved=fixed/adjustable … device=…` 一行判定摘要；车机上无 logcat 时可用会话里的 `describe()` 诊断串拍照
+- 若自动判定与实际不符（罕见机型），可在 **设置 → 开发者选项 → 音量模式** 手动覆盖为「软件增益 / 系统音量」，作为车机无 adb 时的自救入口（该项仅在原生壳内出现）
 
 ## 已知注意
 

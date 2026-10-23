@@ -137,7 +137,7 @@ import { selectSleepTimerSnapshot, useSleepTimerStore } from './stores/useSleepT
 import { selectStageSettingsSnapshot, useStageSettingsStore } from './stores/useStageSettingsStore';
 import { selectAudioSettingsSnapshot, useAudioSettingsStore } from './stores/useAudioSettingsStore';
 import { useNativeVolumeMirrorStore } from './stores/useNativeVolumeMirrorStore';
-import { isNativeAndroidShell } from './services/foliaExtensionBridge';
+import { systemVolumeGoverns } from './utils/nativeVolumeMode';
 import { useSettingsModalStore } from './stores/useSettingsModalStore';
 import { audioBands, audioPower, bass, currentTime, lowMid, lyricCurrentTime, mid, spectrum, treble, vocal } from './stores/motionSignals';
 import { saveToCache } from './services/db';
@@ -179,14 +179,12 @@ const NEXT_UP_LEAD_SEC = 5;
  * 系统媒体音量是否真的在缩放声音（而非 DiLink 那种"写得进、回读得出、功放不动"的假可调）。
  *
  * 判据必须是"原生壳 + 探测说可调 + 实测档位低于满档"三件同时成立：只看 probe 会在 DiLink 上
- * 假通过，把网页增益钉死成 1，表现为永远最大声。App 的 syncOutputGain 与 duck 层级共用这一处。
+ * 假通过，把网页增益钉死成 1，表现为永远最大声。App 的 syncOutputGain 与 duck 层级共用这一处，
+ * 与 usePlaybackAudioBridge 也必须一致——所以实现统一收敛在 utils/nativeVolumeMode。
  */
 const resolveSystemVolumeGoverns = (): boolean => {
     const mirror = useNativeVolumeMirrorStore.getState();
-    return isNativeAndroidShell()
-        && mirror.fixedVolume === false
-        && mirror.systemVolume !== null
-        && mirror.systemVolume < 0.999;
+    return systemVolumeGoverns(mirror.fixedVolume, mirror.systemVolume);
 };
 
 export default function App() {

@@ -33,6 +33,17 @@ vi.mock('react', () => ({
     useMemo: (factory: () => unknown) => factory(),
     useRef: (initial: unknown) => reactHooks.useRef(initial),
     useEffect: (effect: () => unknown) => { reactHooks.effects.push(effect); },
+    useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
+}));
+
+// 音量归属不归这个用例管：mode 解析走真实桥在 node 环境下会重试 3s，还会把异步续跑
+// 留到用例结束之后。固定成"网页层管"（systemGoverns=false）与旧实现的内联判据等价。
+vi.mock('../../../src/utils/nativeVolumeMode', () => ({
+    getVolumeModeOverride: () => 'auto',
+    subscribeVolumeModeOverride: () => () => { },
+    setVolumeModeOverride: vi.fn(),
+    resolveNativeVolumeMode: async () => null,
+    systemVolumeGoverns: () => false,
 }));
 
 const playbackState = vi.hoisted(() => ({
@@ -50,6 +61,7 @@ vi.mock('../../../src/stores/useAudioSettingsStore', () => ({
         enableMediaCache: false,
         audioEqualizerSettings: { enabled: false, effects: {}, bands: [] },
     }),
+    getState: () => ({ handleSetVolume: vi.fn(), volume: 0.7, isMuted: false }),
 }));
 vi.mock('../../../src/stores/useAppViewStore', () => ({
     useAppViewStore: (selector: (state: Record<string, unknown>) => unknown) => selector({

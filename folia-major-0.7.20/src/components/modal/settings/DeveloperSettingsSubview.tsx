@@ -1,5 +1,5 @@
 import React, { useSyncExternalStore } from 'react';
-import { Activity, FolderOpen, ScrollText } from 'lucide-react';
+import { Activity, FolderOpen, ScrollText, Volume2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { Theme } from '../../../types';
 import {
@@ -15,6 +15,15 @@ import {
     subscribeToDebugModule,
     type DebugLogMode,
 } from '../../../services/debug/debugModule';
+import { isNativeAndroidShell } from '../../../services/foliaExtensionBridge';
+import {
+    getVolumeModeOverride,
+    setVolumeModeOverride,
+    subscribeVolumeModeOverride,
+    systemVolumeGoverns,
+    type VolumeModeOverride,
+} from '../../../utils/nativeVolumeMode';
+import { useNativeVolumeMirrorStore } from '../../../stores/useNativeVolumeMirrorStore';
 import ConsoleLogPanel from '../../shared/ConsoleLogPanel';
 
 // src/components/modal/settings/DeveloperSettingsSubview.tsx
@@ -84,6 +93,78 @@ const ModeChoice: React.FC<{
                     </button>
                 );
             })}
+        </div>
+    );
+};
+
+/**
+ * 音量模式覆盖（仅原生壳渲染）。
+ *
+ * 车机的系统音量常是"假可调"：AudioManager 写得进、回读得出，功放却不听（DiLink 实测）。
+ * 自动探测漏判时（无名车机、旧版持久 WebExtension 没有 getVolumeMode），这里允许强制走
+ * 应用内软件增益——车机上没有 adb，这是用户唯一的自救入口，也是排查时的关键信息位。
+ */
+const VolumeModeCard: React.FC<{
+    isDaylight: boolean;
+    settingsCardClass: string;
+}> = ({ isDaylight, settingsCardClass }) => {
+    const { t } = useTranslation();
+    const override = useSyncExternalStore(subscribeVolumeModeOverride, getVolumeModeOverride);
+    const fixedVolume = useNativeVolumeMirrorStore(state => state.fixedVolume);
+    const systemVolume = useNativeVolumeMirrorStore(state => state.systemVolume);
+    const governs = systemVolumeGoverns(fixedVolume, systemVolume);
+
+    const detected = fixedVolume === null
+        ? (t('options.volumeModeStateUnknown') || 'Detected: unknown')
+        : fixedVolume
+            ? (t('options.volumeModeStateFixed') || 'Detected: fixed-volume head unit')
+            : (t('options.volumeModeStateAdjustable') || 'Detected: system adjustable');
+    const effective = governs
+        ? (t('options.volumeModeEffectiveSystem') || 'Active: system media volume')
+        : (t('options.volumeModeEffectiveSoft') || 'Active: in-app software gain');
+
+    const options: Array<{ mode: VolumeModeOverride; label: string }> = [
+        { mode: 'auto', label: t('options.volumeModeAuto') || 'Auto' },
+        { mode: 'fixed', label: t('options.volumeModeFixed') || 'Software gain' },
+        { mode: 'system', label: t('options.volumeModeSystem') || 'System' },
+    ];
+
+    return (
+        <div className={`rounded-2xl border p-4 space-y-3 ${settingsCardClass}`}>
+            <div className="flex items-start gap-3">
+                <div className="p-2 rounded-lg opacity-60 shrink-0">
+                    <Volume2 size={14} />
+                </div>
+                <div className="min-w-0 space-y-1">
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                        {t('options.volumeMode') || 'Volume mode'}
+                    </span>
+                    <div className="text-xs opacity-50" style={{ color: 'var(--text-secondary)' }}>
+                        {t('options.volumeModeDesc')
+                            || 'Car head units often fake an adjustable system volume. Force in-app software gain when the wheel or slider stops working.'}
+                    </div>
+                </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] opacity-70" style={{ color: 'var(--text-secondary)' }}>
+                    {`${detected} · ${effective}`}
+                </span>
+                <div className="flex gap-1.5">
+                    {options.map(option => {
+                        const isActive = override === option.mode;
+                        return (
+                            <button
+                                key={option.mode}
+                                type="button"
+                                onClick={() => setVolumeModeOverride(option.mode)}
+                                className={`rounded-full border px-3 py-1 text-[11px] transition-colors ${isDaylight ? 'border-black/10 hover:bg-black/[0.05]' : 'border-white/10 hover:bg-white/[0.07]'} ${isActive ? (isDaylight ? 'bg-black/[0.08]' : 'bg-white/[0.12]') : 'opacity-55'}`}
+                            >
+                                {option.label}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
         </div>
     );
 };
@@ -199,6 +280,14 @@ const DeveloperSettingsSubview: React.FC<DeveloperSettingsSubviewProps> = ({
                     listMaxHeightClass="max-h-[22rem]"
                 />
             </div>
+
+            {/* 仅安卓壳：桌面端没有系统媒体音量这回事，卡片上去只会让人乱按。 */}
+            {isNativeAndroidShell() ? (
+                <VolumeModeCard
+                    isDaylight={isDaylight}
+                    settingsCardClass={settingsCardClass}
+                />
+            ) : null}
 
             <div className={`rounded-2xl border p-4 space-y-4 ${settingsCardClass}`}>
                 <div className="flex items-center justify-between gap-4">

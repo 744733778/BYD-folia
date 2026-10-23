@@ -1,7 +1,10 @@
 package com.foliaapp.android
 
 import android.content.Context
+import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.media.AudioManager
+import android.app.UiModeManager
 import android.os.Build
 import android.util.Log
 
@@ -16,10 +19,13 @@ import android.util.Log
  * 所以判定顺序改成：先看身份，再看能力，最后才用探测兜底。
  * 1. `AudioManager.isVolumeFixed` 明确说固定 → fixed；
  * 2. 车机 OEM（比亚迪/DiLink/腾势…）→ 一律 fixed，不问系统；
- * 3. 其余机型才做写入—回读探测。
+ * 3. 车机 UI 模式（UiModeManager=CAR）或 Android Automotive 系统特性 → fixed；
+ * 4. 其余机型才做写入—回读探测。
  *
- * 第 2 条是抄 SaltPlayer（Moriafly/media-kit 的 `MiPlayAudioSupport`）的做法：OEM 差异
- * 靠白名单/身份判定，不指望通用 API 能问出来。
+ * 第 2、3 条是抄 SaltPlayer（Moriafly/media-kit 的 `MiPlayAudioSupport`）的做法：OEM 差异
+ * 靠白名单/身份判定，不指望通用 API 能问出来。身份信号宁可多一路——白名单漏掉的无名车机
+ * （Build 字段里既没有品牌、也不是 Automotive 一体机）还有第 3 条兜底；
+ * 再漏，前端还有 null=未知时网页层接管的兜底和用户覆盖开关。
  */
 object VolumeMode {
 
@@ -51,6 +57,14 @@ object VolumeMode {
                     Log.d(TAG, "resolved=$FIXED (OEM=${deviceTag()})")
                     FIXED
                 }
+                isCarUiMode(context) -> {
+                    Log.d(TAG, "resolved=$FIXED (UiModeManager=CAR)")
+                    FIXED
+                }
+                hasAutomotiveFeature(context) -> {
+                    Log.d(TAG, "resolved=$FIXED (android.hardware.type.automotive)")
+                    FIXED
+                }
                 probeWritable(am) -> ADJUSTABLE
                 else -> FIXED
             }
@@ -77,11 +91,46 @@ object VolumeMode {
         val streamNow = am?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: -1
         return "mode=${resolve(context)} isVolumeFixed=${am?.isVolumeFixed} " +
             "streamMax=$streamMax streamVolume=$streamNow " +
-            "sdk=${Build.VERSION.SDK_INT} device=${deviceTag()}"
+            "sdk=${Build.VERSION.SDK_INT} device=${deviceTag()} " +
+            "uiMode=${uiModeTypeName(context)} automotive=${hasAutomotiveFeature(context)}"
     }
 
     /** 车机 OEM 身份：命中就不必再信 AudioManager 的自述。 */
     private fun isCarHeadUnit(): Boolean = CAR_BRANDS.any { deviceTag().contains(it) }
+
+    /**
+     * 车机 UI 模式（UiModeManager.currentModeType == UI_MODE_TYPE_CAR）。
+     * 比品牌白名单更硬的信号：车载桌面/Android Automotive 一体机都会置这个模式，
+     * 不依赖 Build 字段里恰好出现某个品牌字符串。
+     */
+    private fun isCarUiMode(context: Context): Boolean = try {
+        val um = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+        um?.currentModeType == Configuration.UI_MODE_TYPE_CAR
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun uiModeTypeName(context: Context): String = try {
+        when ((context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager)?.currentModeType) {
+            Configuration.UI_MODE_TYPE_CAR -> "car"
+            Configuration.UI_MODE_TYPE_DESK -> "desk"
+            Configuration.UI_MODE_TYPE_TELEVISION -> "tv"
+            Configuration.UI_MODE_TYPE_APPLIANCE -> "appliance"
+            Configuration.UI_MODE_TYPE_WATCH -> "watch"
+            Configuration.UI_MODE_TYPE_NORMAL -> "normal"
+            Configuration.UI_MODE_TYPE_UNDEFINED -> "undefined"
+            else -> "?"
+        }
+    } catch (e: Exception) {
+        "?"
+    }
+
+    /** Android Automotive 系统特性：命中即为车载设备。 */
+    private fun hasAutomotiveFeature(context: Context): Boolean = try {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)
+    } catch (e: Exception) {
+        false
+    }
 
     private fun deviceTag(): String =
         listOf(Build.MANUFACTURER, Build.BRAND, Build.MODEL, Build.DEVICE, Build.PRODUCT)

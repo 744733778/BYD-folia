@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { MutableRefObject, RefObject } from 'react';
 import { PlayerState } from '../types';
 import type { ReplayGainInfo, ReplayGainMode, SongResult, StatusMessage } from '../types';
@@ -18,8 +18,14 @@ import { setPlayerState } from '../stores/usePlaybackStore';
 import { useTranslation } from 'react-i18next';
 import { usePlaybackStore } from '../stores/usePlaybackStore';
 import { useAppViewStore } from '../stores/useAppViewStore';
-import { getSystemVolume, getVolumeMode, isNativeAndroidShell, onNativeSystemEvent } from '../services/foliaExtensionBridge';
+import { getSystemVolume, isNativeAndroidShell, onNativeSystemEvent } from '../services/foliaExtensionBridge';
 import { useNativeVolumeMirrorStore } from '../stores/useNativeVolumeMirrorStore';
+import {
+    getVolumeModeOverride,
+    resolveNativeVolumeMode,
+    subscribeVolumeModeOverride,
+    systemVolumeGoverns,
+} from '../utils/nativeVolumeMode';
 
 // src/hooks/usePlaybackAudioBridge.ts
 
@@ -127,6 +133,14 @@ export function usePlaybackAudioBridge({
     //    （旧实现每 600ms 把系统音量写进 gainNode，等于被平方，听起来"音量不跟随/偏小"）。
     //  - 固定音量机型（DiLink）：AudioManager 空转，系统音量永远满档。此时必须改用应用内软件增益，
     //    否则就是"总是最大声、怎么调都无效"。
+    //  - 未知（null）：车机上旧版持久 WebExtension 没有 getVolumeMode、或冷启动端口未就绪。
+    //    **绝不把 null 写成 adjustable**——那会让 systemGoverns 成立、网页增益钉死成 1，
+    //    正是"永远最大声、滑竿和音量键全死"的根因（0.1.21 车机实测）。保持 null：
+    //    网页层继续管，滑竿立即可用，并给一个不至于满功率的初值。
+    const volumeModeOverride = useSyncExternalStore(
+        subscribeVolumeModeOverride,
+        getVolumeModeOverride,
+    );
     useEffect(() => {
         if (!isNativeAndroidShell()) return;
         let cancelled = false;
@@ -140,6 +154,7 @@ export function usePlaybackAudioBridge({
 
         const startSystemMirror = () => {
             // 事件驱动：壳层 ContentObserver 一有变化就推 → UI 跟手、零轮询。
+            // fixed 模式同样订阅：滚轮事件要换算成应用内档位（见下方 wheel 映射）。
             off = onNativeSystemEvent((method, payload) => {
                 if (method !== 'volume') return;
                 const v = typeof payload === 'number' ? payload : Number.parseFloat(String(payload));
@@ -150,20 +165,13 @@ export function usePlaybackAudioBridge({
             timer = window.setInterval(() => { void getSystemVolume().then(applyMirror); }, 30000);
         };
 
-        void getVolumeMode().then(mode => {
-            if (cancelled) return;
-            const fixed = mode === 'fixed';
-            useNativeVolumeMirrorStore.getState().setFixedVolume(fixed);
-            if (!fixed) {
-                startSystemMirror();
-                return;
-            }
-            // 固定音量：把持久化的应用内音量装回 store（原生壳 readStoredVolume 恒 1），
-            // 再立刻写进 gainNode —— 车机一启动就是合适的响度，而不是满功率。
-            //
-            // 独立键 player_soft_volume：绝不复用 player_volume。旧版本在车机上可能把
-            // player_volume 写成 0（那次是拖到静音试的），拿它当软音量初值就是"一启动全静音，
-            // 而且怎么调都没声"。这里 0 也视为无效值，退回默认 0.7。
+        // 固定音量/未知模式：把持久化的应用内音量装回 store（原生壳 readStoredVolume 恒 1），
+        // 再立刻写进 gainNode —— 车机一启动就是合适的响度，而不是满功率。
+        //
+        // 独立键 player_soft_volume：绝不复用 player_volume。旧版本在车机上可能把
+        // player_volume 写成 0（那次是拖到静音试的），拿它当软音量初值就是"一启动全静音，
+        // 而且怎么调都没声"。这里 0 也视为无效值，退回默认 0.7。
+        const applySoftVolumeDefault = () => {
             const parsed = Number.parseFloat(localStorage.getItem(SOFT_VOLUME_KEY) ?? '');
             const level = Number.isFinite(parsed) && parsed > 0
                 ? Math.min(1, Math.max(MIN_SOFT_VOLUME, parsed))
@@ -172,6 +180,25 @@ export function usePlaybackAudioBridge({
             applyOutputLevel(level, 0);
             // 冷启动没有用户手势，AudioContext 可能还没跑起来：先把上下文拉起来再确认增益。
             ensureAudioContextRunning();
+        };
+
+        void resolveNativeVolumeMode().then(fixed => {
+            if (cancelled) return;
+            if (fixed === null) {
+                // 未知：不写镜像、不交给系统。startSystemMirror 只用于滚轮映射与显示。
+                console.log('[Volume] mode unresolved after retries; web layer keeps control');
+                startSystemMirror();
+                applySoftVolumeDefault();
+                return;
+            }
+            useNativeVolumeMirrorStore.getState().setFixedVolume(fixed);
+            startSystemMirror();
+            if (fixed) {
+                console.log('[Volume] mode=fixed; software gain active');
+                applySoftVolumeDefault();
+            } else {
+                console.log('[Volume] mode=adjustable; system volume governs');
+            }
         });
 
         return () => {
@@ -179,7 +206,7 @@ export function usePlaybackAudioBridge({
             off?.();
             if (timer) window.clearInterval(timer);
         };
-    }, [applyOutputLevel, ensureAudioContextRunning]);
+    }, [applyOutputLevel, ensureAudioContextRunning, volumeModeOverride]);
 
     // 应用内音量 → 输出层。原生壳只要不是"系统音量确认可用"（fixedVolume === false），
     // 这一层就是唯一音量闸：DiLink 这类车机 isVolumeFixed 可能报 false，但 STREAM_MUSIC 写进去
@@ -188,19 +215,20 @@ export function usePlaybackAudioBridge({
     const systemVolume = useNativeVolumeMirrorStore(state => state.systemVolume);
     const appVolume = useAudioSettingsStore(state => state.volume);
     const appMuted = useAudioSettingsStore(state => state.isMuted);
-    // 与 App.syncOutputGain 里的 systemGoverns 保持完全一致：探测说"可调"还不够，系统音量
-    // 必须真的低于满档，才承认系统那层在缩放。DiLink 的探测会假通过，判据不一致的话
-    // 这里会提前 return，滑杆和启动初值都落不到增益上（改了等于没改）。
-    const systemGovernsNow = isNativeAndroidShell()
-        && fixedVolume === false
-        && systemVolume !== null
-        && systemVolume < 0.999;
+    // 与 App.syncOutputGain 里的判据保持完全一致（共用 utils/nativeVolumeMode）：
+    // 探测说"可调"还不够，系统音量必须真的低于满档，才承认系统那层在缩放。DiLink 的探测会
+    // 假通过，判据不一致的话这里会提前 return，滑杆和启动初值都落不到增益上（改了等于没改）。
+    const systemGovernsNow = systemVolumeGoverns(fixedVolume, systemVolume);
     useEffect(() => {
-        if (!isNativeAndroidShell() || systemGovernsNow) return;
-        // 静音之外永远给一个可听见的下限：固定音量车机没有第二道音量闸，
-        // 增益一旦是 0 就彻底没声音，用户连"是不是在放"都判断不了。
-        const level = appMuted ? 0 : Math.max(MIN_SOFT_VOLUME, appVolume);
+        if (!isNativeAndroidShell()) return;
+        // 系统接管时也要把网页增益归位到 1：否则从软件增益切到系统音量（用户拨覆盖开关，
+        // 或探测结果翻转）时，旧的软增益还挂在音频图上，系统音量再乘一次就是"音量被平方"，
+        // 听起来像切了模式后突然变小。syncOutputGain 在 governs 时写的正是 1。
+        const level = systemGovernsNow
+            ? getTargetPlaybackVolume()
+            : (appMuted ? 0 : Math.max(MIN_SOFT_VOLUME, appVolume));
         applyOutputLevel(level, 0.02);
+        if (systemGovernsNow) return;
         // 只记用户真正调过的音量；0 不记，免得下次启动读到 0 又变成静音。
         if (!appMuted && appVolume > 0) {
             try {
@@ -210,7 +238,33 @@ export function usePlaybackAudioBridge({
             }
         }
         ensureAudioContextRunning();
-    }, [systemGovernsNow, systemVolume, fixedVolume, appVolume, appMuted, applyOutputLevel, ensureAudioContextRunning]);
+    }, [systemGovernsNow, systemVolume, fixedVolume, appVolume, appMuted, applyOutputLevel, ensureAudioContextRunning, getTargetPlaybackVolume]);
+
+    // 网页层管音量时（fixed / 未知 / 覆盖为 fixed），把系统音量变化换算成应用内档位：
+    // 假可调车机（DiLink）上 STREAM_MUSIC 只被 AudioService 缓存、功放不动，但滚轮/音量键
+    // 产生的事件是真的。换算过来，方向盘滚轮就能调软件增益——否则 fixed 车上实体按键全死。
+    // 系统真可调时（systemGoverns）不映射：那会导致系统与网页双重调节（音量被平方）。
+    const lastMappedSystemVolumeRef = useRef<number | null>(null);
+    useEffect(() => {
+        if (!isNativeAndroidShell() || systemGovernsNow) {
+            lastMappedSystemVolumeRef.current = null;
+            return;
+        }
+        return onNativeSystemEvent((method, payload) => {
+            if (method !== 'volume') return;
+            const v = typeof payload === 'number' ? payload : Number.parseFloat(String(payload));
+            if (!Number.isFinite(v)) return;
+            const previous = lastMappedSystemVolumeRef.current;
+            lastMappedSystemVolumeRef.current = v;
+            // 首个事件只建立基线：启动时读到的当前档位不是用户操作，不能折算成跳变。
+            if (previous === null) return;
+            const delta = v - previous;
+            if (Math.abs(delta) < 1e-4) return;
+            const store = useAudioSettingsStore.getState();
+            const next = Math.min(1, Math.max(MIN_SOFT_VOLUME, store.volume + delta));
+            store.handleSetVolume(next);
+        });
+    }, [systemGovernsNow]);
 
     // 输出自检（原生壳）：element 明明在播，但音频图出口一点能量都没有 ⇒ 静音发生在
     // WebAudio 这一层（上下文被挂起、某个 gain 停在 0、淡化节点没回来）。固定音量车机没有

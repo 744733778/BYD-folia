@@ -242,8 +242,10 @@ const dispatchNativeEvent = (ns: string, method: string, payload: unknown, seq?:
     // 车机排查口：原生的系统事件全从这里进来，留一行在会话日志里（设置 → 开发者选项）。
     // 按了方向盘却读不到这行，说明事件根本没到应用 —— 那是车厂把它派给了别人，
     // 不是我们分发错了。这行和壳层的 keyDiag 合起来才能把两种失败分开。
+    // 'volume' 也记：假可调车机上滚轮"没反应"时，这行能区分"事件到了但功放不听"
+    // （映射生效、软件增益在动）和"事件根本没来"（车厂没派发）两种完全不同的病因。
     if (method === 'mediaKey' || method === 'volumeKey' || method === 'focus'
-        || method === 'keyDiag' || method === 'diag') {
+        || method === 'keyDiag' || method === 'diag' || method === 'volume') {
         console.log(
             '[CarKeys] native →',
             method,
