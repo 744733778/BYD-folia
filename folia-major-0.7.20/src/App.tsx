@@ -138,6 +138,7 @@ import { selectStageSettingsSnapshot, useStageSettingsStore } from './stores/use
 import { selectAudioSettingsSnapshot, useAudioSettingsStore } from './stores/useAudioSettingsStore';
 import { useNativeVolumeMirrorStore } from './stores/useNativeVolumeMirrorStore';
 import { systemVolumeGoverns } from './utils/nativeVolumeMode';
+import { isNativeAndroidShell } from './services/foliaExtensionBridge';
 import { useSettingsModalStore } from './stores/useSettingsModalStore';
 import { audioBands, audioPower, bass, currentTime, lowMid, lyricCurrentTime, mid, spectrum, treble, vocal } from './stores/motionSignals';
 import { saveToCache } from './services/db';
@@ -185,6 +186,36 @@ const NEXT_UP_LEAD_SEC = 5;
 const resolveSystemVolumeGoverns = (): boolean => {
     const mirror = useNativeVolumeMirrorStore.getState();
     return systemVolumeGoverns(mirror.fixedVolume, mirror.systemVolume);
+};
+
+/**
+ * 音量写入诊断（车机排查口，仅原生壳打印）。
+ *
+ * 车机上没有 adb，"滚轮事件到了、APP 档位也变了，但响度不变"只能从会话日志定位。
+ * 这行记录每次音量变化最终落在哪一层（graph=WebAudio 增益节点 / element=audio 元素音量）、
+ * 目标振幅、写回读值与上下文状态：
+ * - 落点与目标不一致 ⇒ 写入层断了；
+ * - 落点一致而响度不变 ⇒ 音频不走这一层，配合 usePlaybackAudioBridge 的自检峰值判断。
+ * 连续相同值只记一次，避免滑杆拖动时刷屏。
+ */
+let lastVolumeWriteLog: { sink: string; value: number } | null = null;
+const logVolumeWrite = (
+    sink: 'graph' | 'element',
+    target: number,
+    ctxState: string,
+    readBack: number | null,
+): void => {
+    if (!isNativeAndroidShell()) return;
+    if (lastVolumeWriteLog
+        && lastVolumeWriteLog.sink === sink
+        && Math.abs(lastVolumeWriteLog.value - target) < 0.002) {
+        return;
+    }
+    lastVolumeWriteLog = { sink, value: target };
+    console.log(
+        `[Volume] write → ${target.toFixed(3)} sink=${sink} ctx=${ctxState}`
+        + (readBack === null ? '' : ` gainNode=${readBack.toFixed(3)}`)
+    );
 };
 
 export default function App() {
@@ -554,25 +585,40 @@ export default function App() {
      */
     const applyOutputGain = useCallback((gain: number, smoothing = 0.015) => {
         const outputGain = Math.min(1, Math.max(0, Number.isFinite(gain) ? gain : 0));
+        const context = audioContextRef.current;
+        // 上下文不存在、或被内核回收（closed）时不能写 AudioParam：closed 上下文上
+        // setValueAtTime / setTargetAtTime 会抛 InvalidStateError，而这个异常会顺着
+        // syncOutputGain → 音量 effect 冒泡，把整个 effect 弄死——之后所有音量变化
+        // （滚轮、滑杆、启动初值）都写不进去，表现就是"怎么调都没反应"。
+        // 所以图的可用性单独判一次，写入再兜一层 try。
+        const graphAlive = Boolean(gainNodeRef.current && context && context.state !== 'closed');
 
-        if (gainNodeRef.current && audioContextRef.current) {
-            // Volume only. ReplayGain lives on each deck now, because during a blend the two
-            // tracks need their own compensation and this node is shared by both.
-            if (smoothing <= 0) {
-                gainNodeRef.current.gain.setValueAtTime(
-                    outputGain,
-                    audioContextRef.current.currentTime
-                );
-            } else {
-                gainNodeRef.current.gain.setTargetAtTime(
-                    outputGain,
-                    audioContextRef.current.currentTime,
-                    smoothing
+        if (graphAlive && gainNodeRef.current && context) {
+            try {
+                // Volume only. ReplayGain lives on each deck now, because during a blend the two
+                // tracks need their own compensation and this node is shared by both.
+                if (smoothing <= 0) {
+                    gainNodeRef.current.gain.setValueAtTime(
+                        outputGain,
+                        context.currentTime
+                    );
+                } else {
+                    gainNodeRef.current.gain.setTargetAtTime(
+                        outputGain,
+                        context.currentTime,
+                        smoothing
+                    );
+                }
+            } catch (error) {
+                console.warn(
+                    `[Volume] gainNode write refused (ctx=${context.state}); element volume takes over`,
+                    error,
                 );
             }
             // deck 元素那一层同样写一遍：图没接上时（车机上 AudioContext 被策略拦掉、deck 建链
             // 失败）gainNode 是悬空的，写了也没人听，只有 element.volume 能真的改变响度。
             deckVolumeSinkRef.current?.(outputGain);
+            logVolumeWrite('graph', outputGain, context.state, gainNodeRef.current.gain.value);
             return;
         }
 
@@ -581,6 +627,7 @@ export default function App() {
             audioRef.current.volume = outputGain;
             audioRef.current.muted = isMuted;
         }
+        logVolumeWrite('element', outputGain, context ? context.state : 'none', null);
     }, [isMuted]);
 
     const syncOutputGain = useCallback((targetVolume: number, smoothing = 0.015) => {

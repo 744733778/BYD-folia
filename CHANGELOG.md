@@ -3,6 +3,32 @@
 本文件记录 foliaAPP 安卓移植版的版本变更，版本号与 `android-folia-shell/app/build.gradle`
 的 `versionName` / `versionCode` 一一对应。前端改动同步反映在 `folia-major-0.7.20/` 子树中。
 
+## 0.1.28（versionCode 28）
+
+- **车机滚轮音量仍不可控——加决定性诊断 + 两处真实断点加固**。用户实测 0.1.27：滚轮事件到达
+  （`[CarKeys] native → volume` 随滚轮变化）、模式判定正确（`mode=fixed`）、APP 档位跟手
+  （`wheel Δ → app=0.923/0.872/…`），但响度不变。静态逐行核查整条写入链
+  （事件→store→effect→syncOutputGain→gainNode/deckVolumeSink）均正确，故断点在运行时状态，
+  本版不盲改，补可观测性并修掉两条能让"写入落空"的真实路径：
+- **诊断（会话日志可读，车机无 adb）**：
+  - `[Volume] write → x.xxx sink=graph|element ctx=… gainNode=…`：每次音量变化落在哪一层、
+    目标值、写回读值、上下文状态。落点与目标不一致 = 写入层断了；
+  - `[Volume] self-check: peak=… prev=… ctx=… gainNode=… elVol=… storeVol=…`：音量落下去
+    600ms 后实测 AnalyserNode 峰值——串在音量/淡化节点之后，读到什么功放放大什么。
+    峰值随档位走 = 链路通；档位动而峰值不动 = 音频不走这条图；
+  - `[AudioContext] graph ready / resume attempt / resumed`：图建成时上下文状态、几只 deck 接上；
+  - `[Volume] analyser reads silence while playing: …`：静音自检激活时的完整状态。
+- **加固 1（closed 上下文不再弄死音量 effect）**：`applyOutputGain` 原先只判
+  `gainNodeRef && audioContextRef` 存在，上下文被内核回收（closed）时 AudioParam 写入会抛
+  InvalidStateError，异常顺着 syncOutputGain 冒泡把整个音量 effect 弄死——之后所有音量变化
+  （滚轮/滑杆/启动初值）都写不进去，正是"怎么调都没反应"。改为单独判 `state !== 'closed'`
+  并兜 try/catch，退回元素音量层。
+- **加固 2（deck 元素重挂后音量不再钉死 1）**：`applyElementVolume` 原先只看 chainsRef 判断
+  "元素在图里、element.volume 保持 1"。React 重挂会让 deck 换成没被抓过的新元素，旧链仍在 →
+  新元素被误钉在 1、gainNode 又管不到它 ⇒ 音量全死。新增 capturedElementRef 记录每个 deck
+  真正被抓进图的元素，身份不符时改写元素音量；bindDeck 对重挂做旧链清理 + 图还活着就重接。
+- build.gradle: versionCode 28 / versionName 0.1.28。
+
 ## 0.1.27（versionCode 27）
 
 - **修复在线匹配封面始终不显示（真根因）**：日志实锤 `[CoverPlay] after match coverUrl=null onlineMeta.coverUrl=undefined useOnline=false`

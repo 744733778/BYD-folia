@@ -97,15 +97,65 @@ export function usePlaybackAudioBridge({
         syncOutputGain(targetVolume, smoothing);
     }, [syncOutputGain]);
 
+    /**
+     * 音量自检（车机排查口）：增益写下去之后，唯一能证明"响度真的跟着变了"的证据是
+     * AnalyserNode 的实测峰值——它串在音量节点与淡化节点之后，读到的是什么，
+     * 送进功放的就是什么。每次应用内音量变化后约 600ms 采一次样：
+     * - 峰值随档位走 ⇒ 输出层真的在缩放（音量链路是通的）；
+     * - 档位在动而峰值不动 ⇒ 音频不走这条图（元素直通 / 图没接上），病因立刻分明；
+     * - 峰值恒 0 而 elVol 在动 ⇒ 元素没接进图，element.volume 才是生效的那一层。
+     */
+    const lastSelfCheckPeakRef = useRef<number | null>(null);
+    const selfCheckTimerRef = useRef<number | null>(null);
+    const sampleAnalyserPeak = (analyser: AnalyserNode): number => {
+        const buffer = new Uint8Array(analyser.fftSize);
+        analyser.getByteTimeDomainData(buffer);
+        let peak = 0;
+        for (let i = 0; i < buffer.length; i += 1) {
+            const deviation = Math.abs(buffer[i] - 128);
+            if (deviation > peak) peak = deviation;
+        }
+        return peak / 128;
+    };
+    const scheduleVolumeSelfCheck = useCallback(() => {
+        if (selfCheckTimerRef.current !== null) window.clearTimeout(selfCheckTimerRef.current);
+        selfCheckTimerRef.current = window.setTimeout(() => {
+            selfCheckTimerRef.current = null;
+            const analyser = analyserRef.current;
+            const context = audioContextRef.current;
+            const element = audioRef.current;
+            if (!analyser || !context || !element || element.paused || element.ended) return;
+            const peak = sampleAnalyserPeak(analyser);
+            const previous = lastSelfCheckPeakRef.current;
+            lastSelfCheckPeakRef.current = peak;
+            const gainValue = gainNodeRef.current ? gainNodeRef.current.gain.value : null;
+            console.log(
+                `[Volume] self-check: peak=${peak.toFixed(3)}`
+                + ` prev=${previous === null ? 'n/a' : previous.toFixed(3)}`
+                + ` ctx=${context.state}`
+                + ` gainNode=${gainValue === null ? 'none' : gainValue.toFixed(3)}`
+                + ` elVol=${element.volume.toFixed(3)}`
+                + ` storeVol=${useAudioSettingsStore.getState().volume.toFixed(3)}`
+            );
+        }, 600);
+    }, [analyserRef, audioContextRef, audioRef, gainNodeRef]);
+    // 自检定时器随 hook 卸载取消，避免回调指向已拆卸的播放器。
+    useEffect(() => () => {
+        if (selfCheckTimerRef.current !== null) window.clearTimeout(selfCheckTimerRef.current);
+    }, []);
+
     // AudioContext 没在跑 ⇒ 一点声音都出不来（声音只从它到 destination），此时写 gainNode
     // 完全无效。车机冷启动自动续播没有用户手势，内核可能把上下文建在 suspended 上，
     // 表现就是"进度条在走、完全没声音、怎么调音量都没反应"。所有播放起点都先拉一次。
     const ensureAudioContextRunning = useCallback(() => {
         const ctx = audioContextRef.current;
         if (!ctx || ctx.state === 'running' || ctx.state === 'closed') return;
+        // 排查口：车机上"没声音/音量不动"时，这行能区分上下文是被钉在 suspended 还是根本没建。
+        console.log(`[AudioContext] resume attempt (state=${ctx.state})`);
         void ctx.resume()
             .then(() => {
                 // 上下文刚恢复：把当前目标音量重新落一遍，别让旧值留在节点上。
+                console.log(`[AudioContext] resumed (state=${ctx.state})`);
                 syncOutputGain(getTargetPlaybackVolume(), 0);
             })
             .catch(() => {
@@ -228,6 +278,8 @@ export function usePlaybackAudioBridge({
             ? getTargetPlaybackVolume()
             : (appMuted ? 0 : Math.max(MIN_SOFT_VOLUME, appVolume));
         applyOutputLevel(level, 0.02);
+        // 音量落下去之后实测一次输出峰值：这是"档位动了、响度没动"的唯一实锤判据。
+        scheduleVolumeSelfCheck();
         if (systemGovernsNow) return;
         // 只记用户真正调过的音量；0 不记，免得下次启动读到 0 又变成静音。
         if (!appMuted && appVolume > 0) {
@@ -238,7 +290,7 @@ export function usePlaybackAudioBridge({
             }
         }
         ensureAudioContextRunning();
-    }, [systemGovernsNow, systemVolume, fixedVolume, appVolume, appMuted, applyOutputLevel, ensureAudioContextRunning, getTargetPlaybackVolume]);
+    }, [systemGovernsNow, systemVolume, fixedVolume, appVolume, appMuted, applyOutputLevel, ensureAudioContextRunning, getTargetPlaybackVolume, scheduleVolumeSelfCheck]);
 
     // 网页层管音量时（fixed / 未知 / 覆盖为 fixed），把系统音量变化换算成应用内档位：
     // 假可调车机（DiLink）上 STREAM_MUSIC 只被 AudioService 缓存、功放不动，但滚轮/音量键
@@ -319,6 +371,14 @@ export function usePlaybackAudioBridge({
                 return;
             }
             if (silentTicksRef.current === 1) {
+                // 排查口：元素在放、峰值却为 0。带上上下文与元素层状态——元素没接进图时
+                // 这里恒触发（element.volume 仍在管响度，自检峰值恒 0，属误报）；接进图却
+                // 读不到能量，才是图真的死了。两种情况在日志里一眼可分。
+                console.warn(
+                    `[Volume] analyser reads silence while playing: ctx=${ctx.state}`
+                    + ` elVol=${el.volume.toFixed(3)}`
+                    + ` storeVol=${useAudioSettingsStore.getState().volume.toFixed(3)}`
+                );
                 // 只做"归位"：把淡化节点收回 1、把上下文拉起来、把用户的目标音量重新写一遍。
                 // 这里曾经还有两档"兜底拉满"（element.volume=1、gain=1），在车机上正好是灾难：
                 // analyser 读不到能量并不等于真的没声音——元素没接进 WebAudio 图时它永远是 0，
@@ -415,12 +475,23 @@ export function usePlaybackAudioBridge({
             if (!decksConnected) {
                 console.warn('[AudioContext] Deck setup incomplete, automix will stay idle');
             }
+            // 排查口：图建成时上下文是什么状态、几只 deck 接上了、初始音量落在哪。
+            // 车机上"滚轮调不了音量"时，这一行 + [Volume] write/self-check 三行合起来能定位
+            // 是图没建、上下文挂着、还是写入层没接到。
+            console.log(
+                `[AudioContext] graph ready: ctx=${ctx.state}`
+                + ` decks=${decksConnected ? 'A+B' : 'partial'}`
+                + ` volume=${getTargetPlaybackVolume().toFixed(3)}`
+            );
             applyReplayGain();
             applyOutputLevel(getTargetPlaybackVolume(), 0);
             // 新建的上下文可能停在 suspended（无手势冷启动），声音会彻底没有。
             ensureAudioContextRunning();
         } catch (error) {
-            console.error('Audio Context Setup Failed:', error);
+            console.error(
+                `Audio Context Setup Failed (ctx=${audioContextRef.current?.state ?? 'gone'}):`,
+                error,
+            );
         }
     }, [analyserRef, applyOutputLevel, applyReplayGain, audioContextRef, audioEqualizerSettings, audioRef, connectDecks, ensureAudioContextRunning, gainNodeRef, getTargetPlaybackVolume]);
 

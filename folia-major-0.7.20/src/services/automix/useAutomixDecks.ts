@@ -273,16 +273,31 @@ export function useAutomixDecks({
      * 换 element（React 重挂）或切到另一只 deck 时都会重落一遍，否则新元素默认 1 就是满音量。
      */
     const desiredElementVolumeRef = useRef(1);
+    /**
+     * 每个 deck 当前**真正被抓进音频图**的那个元素。
+     *
+     * createMediaElementSource 的捕获对元素是永久的：一旦接进图，element.volume 按规范失效，
+     * 响度只能由 gainNode 承担；反之一旦没接进图，element.volume 就是唯一生效的闸。
+     * React 重挂会让 deck 换成新元素——新元素没被抓过，可 chainsRef 里还留着旧元素的链，
+     * 单看 chainsRef 会把新元素误钉在 1（车机上"滚轮/滑杆全死"的一条真实路径）。
+     * 所以判据是"链在 且 链抓的就是当前元素"，身份不符时改写成元素音量。
+     */
+    const capturedElementRef = useRef<Partial<Record<AutomixDeckId, HTMLAudioElement | null>>>({});
+    /** 混音点：connectDecks 第一次建图时记下，deck 重挂后要把新元素重新接回去。 */
+    const mixOutputRef = useRef<AudioNode | null>(null);
     const applyElementVolume = useCallback((level: number) => {
         const clamped = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 1;
         desiredElementVolumeRef.current = clamped;
         (['A', 'B'] as const).forEach(deck => {
             const el = elementsRef.current[deck];
             if (!el) return;
-            // 已接入图：元素音量会被忽略，这里保持 1，避免某些实现里再乘一次。
-            const next = chainsRef.current[deck] ? 1 : clamped;
+            // 已接入图且抓的就是这个元素：元素音量会被忽略，这里保持 1，避免某些实现里再乘一次。
+            // 元素被换过（React 重挂）：新元素没被抓，element.volume 是唯一生效的闸，必须写。
+            const governedByGraph = Boolean(chainsRef.current[deck])
+                && capturedElementRef.current[deck] === el;
+            const next = governedByGraph ? 1 : clamped;
             if (Math.abs(el.volume - next) > 0.001) el.volume = next;
-            if (!chainsRef.current[deck] && el.muted) el.muted = false;
+            if (!governedByGraph && el.muted) el.muted = false;
         });
     }, []);
 
@@ -467,13 +482,39 @@ export function useAutomixDecks({
         const previous = elementsRef.current[deck];
         if (previous && element && previous !== element) {
             console.warn(`[Automix] deck ${deck} was remounted while it held a source`);
+            // 旧链抓的是已经摘掉的元素：留着它，applyElementVolume 会把新元素误钉在 1
+            // （音量全死），混音也会对着一个死节点 ramp。丢掉旧链；图还活着就把新元素
+            // 接回去，接不回去至少让 element.volume 接管——响度必须始终有闸。
+            if (chainsRef.current[deck]) {
+                chainsRef.current[deck] = undefined;
+                capturedElementRef.current[deck] = null;
+                const context = audioContextRef.current;
+                const output = mixOutputRef.current;
+                if (context && output && context.state !== 'closed') {
+                    try {
+                        chainsRef.current[deck] = connectAutomixDeck(context, element, output);
+                        capturedElementRef.current[deck] = element;
+                        element.addEventListener('ended', () => harvestRef.current(deck));
+                        console.warn(`[Automix] deck ${deck} reconnected to the graph after remount`);
+                    } catch (error) {
+                        console.warn(
+                            `[Automix] deck ${deck} reconnect after remount failed; element volume governs`,
+                            error,
+                        );
+                    }
+                } else {
+                    console.warn(
+                        `[Automix] deck ${deck} has no live graph after remount; element volume governs`,
+                    );
+                }
+            }
         }
         elementsRef.current[deck] = element;
         if (element) applyElementVolume(desiredElementVolumeRef.current);
         if (deck === session.getActiveDeck()) {
             audioRef.current = element;
         }
-    }, [applyElementVolume, audioRef, session]);
+    }, [applyElementVolume, audioRef, audioContextRef, session]);
 
     const registerDeckA = useCallback((element: HTMLAudioElement | null) => bindDeck('A', element), [bindDeck]);
     const registerDeckB = useCallback((element: HTMLAudioElement | null) => bindDeck('B', element), [bindDeck]);
@@ -543,10 +584,14 @@ export function useAutomixDecks({
     // equaliser and the analyser. One equaliser downstream of the mix keeps CPU flat and, more
     // importantly, stops the tone from stepping in the middle of a blend.
     const connectDecks = useCallback((context: AudioContext, output: AudioNode) => {
+        // 记下混音点：deck 元素日后被重挂时，靠它把新元素接回同一张图。
+        mixOutputRef.current = output;
         (['A', 'B'] as const).forEach(deck => {
             const element = elementsRef.current[deck];
             if (!element || chainsRef.current[deck]) return;
             chainsRef.current[deck] = connectAutomixDeck(context, element, output);
+            // 记下被抓的元素：applyElementVolume 靠这个身份决定写元素音量还是交给增益节点。
+            capturedElementRef.current[deck] = element;
             // The song changes no blend was ever scheduled for. The analyser is only reset by
             // whatever starts the next track on this deck, so the readings are still the finished
             // track's when this fires.
