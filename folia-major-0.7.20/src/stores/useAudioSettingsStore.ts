@@ -39,6 +39,20 @@ export const ENABLE_TRANSCODE_FALLBACK_KEY = 'folia_enable_transcode_fallback';
 /** Whether finished plays of online NetEase tracks are reported to the signed-in account. */
 export const NETEASE_SCROBBLE_KEY = 'folia_netease_scrobble';
 
+/**
+ * 安卓壳：音频是否**直通**（不接进 WebAudio 图），照 APlayer 的通路走。
+ *
+ * APlayer 在这台车机上音量正常，靠的是 ExoPlayer 直接出声——标准媒体通路（USAGE_MEDIA），
+ * 系统音量（STREAM_MUSIC）在这一层被 AudioService 缩放，功放跟着走。folia 的音频一旦被
+ * `createMediaElementSource` 抓进 WebAudio 图，声音就从 AudioContext 的输出流走，
+ * 车机的音量联动未必认这条流——0.1.21~0.1.27 车机实测正是"滚轮事件到、档位跟手、响度不变"。
+ *
+ * 开着直通：deck 元素不捕获，音量完全交给系统（APPlayer 式），网页增益恒 1。
+ * 代价：没有图 → 可视化退化为呼吸动画、均衡器/音效失效、淡入淡出退化为硬切、自动混音不可用。
+ * 关掉：完整 WebAudio 音效链照旧（此时音量能否被滚轮带动取决于车机是否也认 WebAudio 输出流）。
+ */
+export const NATIVE_PASSTHROUGH_KEY = 'folia_native_passthrough';
+
 /** Whether pause fades out and resume fades in (services/playbackFade). On unless switched off. */
 export const PLAYBACK_FADE_KEY = 'folia_playback_fade_enabled';
 
@@ -165,6 +179,11 @@ export type AudioSettingsState = {
     neteaseScrobbleEnabled: boolean;
     /** Short fade when pausing and resuming instead of cutting the sound. On by default. */
     playbackFadeEnabled: boolean;
+    /**
+     * 安卓壳专用：音频直通（不接进 WebAudio 图），照 APlayer 的标准媒体通路走。
+     * 只在原生壳生效；默认开——车机音量联动认的是标准媒体通路。
+     */
+    nativePassthrough: boolean;
     /** Count down to a skip when a song is restricted or fails for an unknown reason. Off by default. */
     autoSkipUnplayable: boolean;
     audioOutputDeviceId: string;
@@ -182,6 +201,7 @@ export type AudioSettingsState = {
     handleToggleTranscodeFallback: (enable: boolean) => void;
     handleToggleNeteaseScrobble: (enable: boolean) => void;
     handleTogglePlaybackFade: (enable: boolean) => void;
+    handleToggleNativePassthrough: (enable: boolean) => void;
     handleToggleAutoSkipUnplayable: (enable: boolean) => void;
     handleSetAudioOutputDeviceId: (deviceId: string) => void;
     handleSetAudioEqualizerSettings: (settings: AudioEqualizerSettings) => void;
@@ -211,6 +231,8 @@ export const useAudioSettingsStore = create<AudioSettingsState>((set, get) => ({
     // Off unless asked for: it writes to the listener's music account, so it is never a default.
     neteaseScrobbleEnabled: getStoredBoolean(NETEASE_SCROBBLE_KEY, false),
     playbackFadeEnabled: getStoredBoolean(PLAYBACK_FADE_KEY, true),
+    // 原生壳专用：默认直通（照 APlayer 的标准媒体通路），车机音量联动才认得。
+    nativePassthrough: getStoredBoolean(NATIVE_PASSTHROUGH_KEY, true),
     // Off unless asked for: skipping a song the listener picked is not something to do by default.
     autoSkipUnplayable: getStoredBoolean(AUTO_SKIP_UNPLAYABLE_KEY, false),
     audioOutputDeviceId: readStoredAudioOutputDeviceId(),
@@ -270,6 +292,10 @@ export const useAudioSettingsStore = create<AudioSettingsState>((set, get) => ({
     handleTogglePlaybackFade: (enable) => {
         setStoredBoolean(PLAYBACK_FADE_KEY, enable);
         set({ playbackFadeEnabled: enable });
+    },
+    handleToggleNativePassthrough: (enable) => {
+        setStoredBoolean(NATIVE_PASSTHROUGH_KEY, enable);
+        set({ nativePassthrough: enable });
     },
     handleToggleAutoSkipUnplayable: (enable) => {
         setStoredBoolean(AUTO_SKIP_UNPLAYABLE_KEY, enable);
@@ -372,6 +398,7 @@ export const selectAudioSettingsSnapshot = (state: AudioSettingsState) => ({
     enableTranscodeFallback: state.enableTranscodeFallback,
     neteaseScrobbleEnabled: state.neteaseScrobbleEnabled,
     playbackFadeEnabled: state.playbackFadeEnabled,
+    nativePassthrough: state.nativePassthrough,
     autoSkipUnplayable: state.autoSkipUnplayable,
     audioOutputDeviceId: state.audioOutputDeviceId,
     audioEqualizerSettings: state.audioEqualizerSettings,
@@ -388,6 +415,7 @@ export const selectAudioSettingsSnapshot = (state: AudioSettingsState) => ({
     handleToggleTranscodeFallback: state.handleToggleTranscodeFallback,
     handleToggleNeteaseScrobble: state.handleToggleNeteaseScrobble,
     handleTogglePlaybackFade: state.handleTogglePlaybackFade,
+    handleToggleNativePassthrough: state.handleToggleNativePassthrough,
     handleToggleAutoSkipUnplayable: state.handleToggleAutoSkipUnplayable,
     handleSetAudioOutputDeviceId: state.handleSetAudioOutputDeviceId,
     handleSetAudioEqualizerSettings: state.handleSetAudioEqualizerSettings,

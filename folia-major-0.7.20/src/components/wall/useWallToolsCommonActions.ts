@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useAudioSettingsStore } from '../../stores/useAudioSettingsStore';
 import { useLatticeSettingsStore } from '../../stores/useLatticeSettingsStore';
 import { usePlaybackStore } from '../../stores/usePlaybackStore';
+import { writeUserVolume } from '../../services/userVolume';
 import type { WallToolsEntry, WallToolsQuickAction } from './WallToolsRows';
 import { useWallToolsHost, type WallToolsHostSnapshot } from './wallToolsHost';
 
@@ -123,7 +124,7 @@ export const useWallToolsCommonActions = ({ queueIslandId }: { queueIslandId: st
         },
         onCommit: value => {
             unmuteForVolumeChange();
-            useAudioSettingsStore.getState().handleSetVolume(value);
+            writeUserVolume(value, { force: true });
         },
     };
 

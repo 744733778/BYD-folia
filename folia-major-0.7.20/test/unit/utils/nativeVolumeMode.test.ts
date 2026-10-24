@@ -46,10 +46,13 @@ describe('systemVolumeGoverns', () => {
         expect(systemVolumeGoverns(null, null)).toBe(false);
     });
 
-    it('原生壳 + adjustable 但档位未知或已满：不交给系统', () => {
+    it('原生壳 + adjustable：系统接管，且不看当前档位读数（照 APlayer：能写就写）', () => {
         nativeShell.current = true;
-        expect(systemVolumeGoverns(false, null)).toBe(false);
-        expect(systemVolumeGoverns(false, 1)).toBe(false);
+        // 档位未知、已满档、低档位——都归系统。旧规则要求"读数低于满档"才让位，
+        // 那条自己发明的实证条件会让车机音量一满档就改判，滚轮随即失灵。
+        expect(systemVolumeGoverns(false, null)).toBe(true);
+        expect(systemVolumeGoverns(false, 1)).toBe(true);
+        expect(systemVolumeGoverns(false, 0.5)).toBe(true);
     });
 
     it('覆盖项优先于探测', () => {

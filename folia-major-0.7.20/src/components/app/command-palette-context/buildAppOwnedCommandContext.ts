@@ -4,6 +4,7 @@ import { useAppViewStore } from '../../../stores/useAppViewStore';
 import { focusLatticeCurrentSong, useLatticeControlsStore } from '../../../stores/useLatticeControlsStore';
 import type { CommandPaletteContext } from '../../command-palette/types';
 import { setStatusMessage } from '../../../stores/useStatusMessageStore';
+import { writeUserVolume } from '../../../services/userVolume';
 import { useAudioSettingsStore } from '../../../stores/useAudioSettingsStore';
 import { usePersonalFmModeStore } from '../../../stores/usePersonalFmModeStore';
 import { useDesktopSettingsStore } from '../../../stores/useDesktopSettingsStore';
@@ -69,7 +70,7 @@ export const buildPlaybackCommandContext = (
         }),
         volume: audio.volume,
         isMuted: audio.isMuted,
-        setVolume: audio.handleSetVolume,
+        setVolume: writeUserVolume,
         toggleMute: audio.handleToggleMute,
         openAddToPlaylist,
         canAddCurrentSongToPlaylist: useAddToPlaylistStore.getState().availability.canAdd,

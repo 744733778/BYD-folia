@@ -3,7 +3,8 @@ import type { RefObject } from 'react';
 import type UnifiedPanel from '../../UnifiedPanel';
 import { setIsPanelOpen, setPanelTab } from '../../../stores/useAppViewStore';
 import { handleSetVisualizerMode } from '../../../stores/useVisualizerSettingsStore';
-import { handleSetVolume, handleToggleMute, setAudioQuality } from '../../../stores/useAudioSettingsStore';
+import { handleToggleMute, setAudioQuality } from '../../../stores/useAudioSettingsStore';
+import { writeUserVolume } from '../../../services/userVolume';
 import { openSettings } from '../../../stores/useSettingsModalStore';
 import { handleToggleCoverColorBg } from '../../../stores/useThemeSettingsStore';
 
@@ -251,7 +252,7 @@ export const buildPlayerPanelModel = ({
             volume,
             isMuted,
             onVolumePreview: handlePreviewVolume,
-            onVolumeChange: handleSetVolume,
+            onVolumeChange: writeUserVolume,
             onToggleMute: handleToggleMute,
             showOpenPanelCloseButton,
             isPanelGuideHotspotActive,

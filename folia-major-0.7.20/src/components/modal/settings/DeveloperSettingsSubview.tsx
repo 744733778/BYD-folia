@@ -24,6 +24,7 @@ import {
     type VolumeModeOverride,
 } from '../../../utils/nativeVolumeMode';
 import { useNativeVolumeMirrorStore } from '../../../stores/useNativeVolumeMirrorStore';
+import { useAudioSettingsStore } from '../../../stores/useAudioSettingsStore';
 import ConsoleLogPanel from '../../shared/ConsoleLogPanel';
 
 // src/components/modal/settings/DeveloperSettingsSubview.tsx
@@ -100,9 +101,9 @@ const ModeChoice: React.FC<{
 /**
  * 音量模式覆盖（仅原生壳渲染）。
  *
- * 车机的系统音量常是"假可调"：AudioManager 写得进、回读得出，功放却不听（DiLink 实测）。
- * 自动探测漏判时（无名车机、旧版持久 WebExtension 没有 getVolumeMode），这里允许强制走
- * 应用内软件增益——车机上没有 adb，这是用户唯一的自救入口，也是排查时的关键信息位。
+ * 口径照 APlayer（remix.myplayer）：系统音量可写就交给系统，网页层不插手；这里只留一个
+ * 手动覆盖——车机系统音量真改不动（AudioManager.isVolumeFixed=true）或探测不出时，
+ * 强制改用应用内软件增益。车机上没有 adb，这是用户唯一的自救入口。
  */
 const VolumeModeCard: React.FC<{
     isDaylight: boolean;
@@ -164,6 +165,62 @@ const VolumeModeCard: React.FC<{
                         );
                     })}
                 </div>
+            </div>
+        </div>
+    );
+};
+
+/**
+ * 车机直通模式（仅原生壳渲染）。
+ *
+ * 照 APlayer（remix.myplayer）的通路：它的 ExoPlayer 直接出声——标准媒体通路，
+ * 系统音量（STREAM_MUSIC）在这一层被 AudioService 缩放，功放跟着走，所以车机滚轮正常。
+ * folia 的音频一旦被 WebAudio 捕获，声音改从 AudioContext 的输出流走，车机的音量联动
+ * 未必认这条流——0.1.21~0.1.27 车机实测正是"滚轮事件到、档位跟手、响度不变"。
+ *
+ * 直通 = 不建图、deck 元素不捕获 → 与 APlayer 同路，音量交给系统。
+ * 代价：可视化退化为呼吸动画、均衡器/音效失效、淡入淡出退化为硬切、自动混音不可用。
+ * 关掉它则保留完整 WebAudio 音效链（音量能否被滚轮带动取决于车机是否也认 WebAudio 输出流）。
+ */
+const NativePassthroughCard: React.FC<{
+    isDaylight: boolean;
+    settingsCardClass: string;
+}> = ({ isDaylight, settingsCardClass }) => {
+    const { t } = useTranslation();
+    const nativePassthrough = useAudioSettingsStore(state => state.nativePassthrough);
+    const toggleNativePassthrough = useAudioSettingsStore(state => state.handleToggleNativePassthrough);
+
+    return (
+        <div className={`rounded-2xl border p-4 space-y-3 ${settingsCardClass}`}>
+            <div className="flex items-start gap-3">
+                <div className="p-2 rounded-lg opacity-60 shrink-0">
+                    <Volume2 size={14} />
+                </div>
+                <div className="min-w-0 space-y-1">
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                        {t('options.nativePassthrough') || 'Car passthrough (APPlayer path)'}
+                    </span>
+                    <div className="text-xs opacity-50" style={{ color: 'var(--text-secondary)' }}>
+                        {t('options.nativePassthroughDesc')
+                            || 'Keep the element on the standard media path so the head unit volume wheel reaches the amplifier. Disables the Web Audio effects chain.'}
+                    </div>
+                </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] opacity-70" style={{ color: 'var(--text-secondary)' }}>
+                    {nativePassthrough
+                        ? (t('options.nativePassthroughOn') || 'On: element plays directly, volume belongs to the system')
+                        : (t('options.nativePassthroughOff') || 'Off: Web Audio effects chain enabled')}
+                </span>
+                <button
+                    type="button"
+                    onClick={() => toggleNativePassthrough(!nativePassthrough)}
+                    className={`rounded-full border px-3 py-1 text-[11px] transition-colors ${isDaylight ? 'border-black/10 hover:bg-black/[0.05]' : 'border-white/10 hover:bg-white/[0.07]'} ${nativePassthrough ? (isDaylight ? 'bg-black/[0.08]' : 'bg-white/[0.12]') : 'opacity-55'}`}
+                >
+                    {nativePassthrough
+                        ? (t('options.nativePassthroughOn') || 'On')
+                        : (t('options.nativePassthroughOff') || 'Off')}
+                </button>
             </div>
         </div>
     );
@@ -283,10 +340,16 @@ const DeveloperSettingsSubview: React.FC<DeveloperSettingsSubviewProps> = ({
 
             {/* 仅安卓壳：桌面端没有系统媒体音量这回事，卡片上去只会让人乱按。 */}
             {isNativeAndroidShell() ? (
-                <VolumeModeCard
-                    isDaylight={isDaylight}
-                    settingsCardClass={settingsCardClass}
-                />
+                <>
+                    <VolumeModeCard
+                        isDaylight={isDaylight}
+                        settingsCardClass={settingsCardClass}
+                    />
+                    <NativePassthroughCard
+                        isDaylight={isDaylight}
+                        settingsCardClass={settingsCardClass}
+                    />
+                </>
             ) : null}
 
             <div className={`rounded-2xl border p-4 space-y-4 ${settingsCardClass}`}>

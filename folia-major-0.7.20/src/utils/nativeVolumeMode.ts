@@ -3,6 +3,11 @@
 // 原生安卓壳「音量归谁管」的唯一决策点。App.syncOutputGain / duck 层级与
 // usePlaybackAudioBridge 都必须经过这里，两边判据不一致就会一个钉死、一个照调。
 //
+// 口径照 APlayer（remix.myplayer，0.1.29 起）：它在同一台车机上音量正常，而它对音量
+// 什么都没做——用户音量就是系统媒体音量（STREAM_MUSIC），网页/播放器层不插手。
+// 所以本模块现在只回答一件事：**系统音量可写就交给系统**；只有系统真的改不动
+// （AudioManager.isVolumeFixed）或用户手动选软件增益时，网页层才自己接管。
+//
 // 背景（车机实测教训，0.1.21）：
 // - getVolumeMode() 返回 null 有两种常见原因：车机上 GeckoView 的 WebExtension 是
 //   **持久化**的，旧版扩展根本没有 getVolumeMode 方法（manifest 1.0 时代）；以及冷启动
@@ -48,24 +53,28 @@ export const subscribeVolumeModeOverride = (listener: () => void): (() => void) 
 };
 
 /**
- * 系统媒体音量是否真的在缩放声音（而非 DiLink 那种"写得进、回读得出、功放不动"的假可调）。
+ * 系统媒体音量是否真的在缩放声音（网页层该不该让位）。
  *
- * 判据必须是"原生壳 + 探测说可调 + 实测档位低于满档"三件同时成立：只看 probe 会在 DiLink 上
- * 假通过，把网页增益钉死成 1，表现为永远最大声。
+ * 口径**照 APlayer（remix.myplayer）**：它对音量什么都没做——不判品牌、不判 automotive、
+ * 系统音量可写就直接写，响度完全交给系统（STREAM_MUSIC → AudioService → 功放），
+ * 在这台车机上滚轮音量正常。网页层要做的是同一件事：**能写就写，网页让位**。
+ *
+ * 所以这里只问"系统音量可不可调"（fixedVolume === false），**不再**要求"当前档位低于满档"。
+ * 旧判据里那条 `systemVolume < 0.999` 是自己发明的：它把"网页层钉死增益"这件事和
+ * "系统音量当前读数"绑在一起，于是车机音量一满档就改判成"网页接管"，滚轮随即失灵。
  *
  * 覆盖项优先于一切探测：车机上没有 adb，探测误判时这是用户唯一的自救入口。
  */
 export const systemVolumeGoverns = (
     fixedVolume: boolean | null,
-    systemVolume: number | null,
+    _systemVolume: number | null,
 ): boolean => {
     if (!isNativeAndroidShell()) return false;
     const override = currentOverride;
     if (override === 'fixed') return false;
     if (override === 'system') return true;
-    return fixedVolume === false
-        && systemVolume !== null
-        && systemVolume < 0.999;
+    // null（还没探测出来）不当成 adjustable：那种情况下网页层继续管，宁可小声也不要满功率。
+    return fixedVolume === false;
 };
 
 /**

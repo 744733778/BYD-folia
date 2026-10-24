@@ -13,6 +13,7 @@ import { setStatusMessage } from '@/stores/useStatusMessageStore';
 import { currentTime } from '@/stores/motionSignals';
 import type { PanelTab } from '@/components/UnifiedPanel';
 import { clampMediaVolume } from '@/utils/appPlaybackHelpers';
+import { writeUserVolume } from '@/services/userVolume';
 import { resolveLikeAvailability } from '@/utils/playerLikeAvailability';
 import { resolveFoliumSongRef, toFoliumSong } from './dto';
 import { emitFoliumEvent } from './events';
@@ -118,7 +119,7 @@ export const useFoliumHostActions = (actions: FoliumAppActions) => {
                 const audio = useAudioSettingsStore.getState();
                 return { volume: clampMediaVolume(audio.volume), muted: audio.isMuted };
             },
-            setVolume: (volume) => useAudioSettingsStore.getState().handleSetVolume(volume),
+            setVolume: (volume) => writeUserVolume(volume, { force: true }),
             setMuted: (muted) => useAudioSettingsStore.getState().handleSetMuted(muted),
             getLoopMode: () => useAudioSettingsStore.getState().loopMode,
             // Not gated on Stage playback, like the remote window's repeat button: the mode is a lasting preference.

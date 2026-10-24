@@ -26,6 +26,7 @@ import {
     subscribeVolumeModeOverride,
     systemVolumeGoverns,
 } from '../utils/nativeVolumeMode';
+import { systemVolumeOwnsOutput } from '../services/userVolume';
 
 // src/hooks/usePlaybackAudioBridge.ts
 
@@ -82,6 +83,12 @@ export function usePlaybackAudioBridge({
     const currentSong = usePlaybackStore(state => state.currentSong);
     const replayGainMode = usePlaybackStore(state => state.replayGainMode);
     const enableMediaCache = useAudioSettingsStore(state => state.enableMediaCache);
+    /**
+     * 直通模式（原生壳默认）：不建 WebAudio 图，deck 元素走标准媒体通路——
+     * 照 APlayer 的通路，让车机的音量联动（STREAM_MUSIC → 功放）真的作用到我们的声音上。
+     */
+    const nativePassthrough = useAudioSettingsStore(state => state.nativePassthrough)
+        && isNativeAndroidShell();
     const isPanelOpen = useAppViewStore(state => state.isPanelOpen);
     const panelTab = useAppViewStore(state => state.panelTab);
 
@@ -199,7 +206,13 @@ export function usePlaybackAudioBridge({
 
         const applyMirror = (v: number | null) => {
             if (cancelled || v === null || !Number.isFinite(v)) return;
-            useNativeVolumeMirrorStore.getState().setSystemVolumeMirror(Math.min(1, Math.max(0, v)));
+            const level = Math.min(1, Math.max(0, v));
+            useNativeVolumeMirrorStore.getState().setSystemVolumeMirror(level);
+            // 系统音量说话时（照 APlayer），store 里的档位就是系统音量的镜像：滑杆、播放页、
+            // 音乐墙工具读的都是它。车机滚轮转过之后界面数字要立刻跟上，而不是停在旧值。
+            if (systemVolumeOwnsOutput()) {
+                useAudioSettingsStore.getState().handleSetVolume(level);
+            }
         };
 
         const startSystemMirror = () => {
@@ -222,6 +235,14 @@ export function usePlaybackAudioBridge({
         // player_volume 写成 0（那次是拖到静音试的），拿它当软音量初值就是"一启动全静音，
         // 而且怎么调都没声"。这里 0 也视为无效值，退回默认 0.7。
         const applySoftVolumeDefault = () => {
+            // 系统音量说话时（照 APlayer）：应用内档位只是系统音量的镜像，不能拿软音量初值去
+            // 覆盖它——否则界面显示的百分比和车机实际档位对不上。系统音量的真值由原生侧的
+            // volume 事件回填（见 applyMirror）。
+            if (systemVolumeOwnsOutput()) {
+                applyOutputLevel(getTargetPlaybackVolume(), 0);
+                ensureAudioContextRunning();
+                return;
+            }
             const parsed = Number.parseFloat(localStorage.getItem(SOFT_VOLUME_KEY) ?? '');
             const level = Number.isFinite(parsed) && parsed > 0
                 ? Math.min(1, Math.max(MIN_SOFT_VOLUME, parsed))
@@ -450,6 +471,15 @@ export function usePlaybackAudioBridge({
         // The context is the sentinel, not the source node: a deck that failed to connect must
         // not let this run twice, because createMediaElementSource throws on a second call.
         if (!audioRef.current || audioContextRef.current) return;
+        // 直通模式（原生壳默认）：**不建 WebAudio 图**，deck 元素不抓进图里，声音走 Gecko 的
+        // 标准媒体通路（USAGE_MEDIA → AudioService → 功放），与 APlayer 的 ExoPlayer 同路。
+        // 车机的音量联动认的是这条通路；音频一旦被 createMediaElementSource 捕获，
+        // 声音改从 AudioContext 的输出流走，滚轮就拧不动了（0.1.21~0.1.27 车机实测）。
+        // 没有图的代价：可视化退化为呼吸动画、均衡器/音效失效、淡入淡出退化为硬切。
+        if (nativePassthrough) {
+            console.log('[AudioContext] passthrough mode: no Web Audio graph, element plays through the standard media path');
+            return;
+        }
         try {
             const AudioContextClass = window.AudioContext || (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
             const ctx = new AudioContextClass();
@@ -493,7 +523,7 @@ export function usePlaybackAudioBridge({
                 error,
             );
         }
-    }, [analyserRef, applyOutputLevel, applyReplayGain, audioContextRef, audioEqualizerSettings, audioRef, connectDecks, ensureAudioContextRunning, gainNodeRef, getTargetPlaybackVolume]);
+    }, [analyserRef, applyOutputLevel, applyReplayGain, audioContextRef, audioEqualizerSettings, audioRef, connectDecks, ensureAudioContextRunning, gainNodeRef, getTargetPlaybackVolume, nativePassthrough]);
 
     /**
      * Writes a fully-played track's audio and cover into the media cache.

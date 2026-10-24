@@ -3,7 +3,31 @@
 本文件记录 foliaAPP 安卓移植版的版本变更，版本号与 `android-folia-shell/app/build.gradle`
 的 `versionName` / `versionCode` 一一对应。前端改动同步反映在 `folia-major-0.7.20/` 子树中。
 
-## 0.1.28（versionCode 28）
+## 0.1.29（versionCode 29）
+
+- **车机音量：整体照抄 APlayer（remix.myplayer）的模型，不再自己发明**。APlayer 在同一台车机上
+  音量正常，而它对音量**什么都没做**：用户音量就是系统媒体音量（STREAM_MUSIC），滑杆直接读写它，
+  播放器自己的音量（`ExoPlayer.volume`）只用于淡入淡出与 duck；不判品牌、不判 automotive、
+  不挂 VolumeProvider、不拦音量键。folia 现在是同一套模型。
+- **原生判定回到 APlayer 口径**（`VolumeMode.kt`）：只问 `AudioManager.isVolumeFixed`。
+  删掉自制的「比亚迪/DiLink/UiMode=CAR/automotive 一律 fixed」白名单——它把车机一律判成 fixed，
+  网页层改用软件增益写 WebAudio 增益节点，而车机音量联动只认标准媒体通路，音频被 WebAudio
+  捕获后功放根本不跟随，于是滚轮怎么拧都没反应（0.1.21~0.1.27 车机实测：事件到、判定对、
+  档位跟手，响度不变）。
+- **网页侧判据同步收敛**（`nativeVolumeMode.ts`）：`systemVolumeGoverns()` 去掉「系统音量读数必须
+  低于满档」这条自制实证条件——能写就写、网页让位（读数为满档就改判，正是老症状的另一半）。
+- **新增「车机直通模式」（原生壳默认开）**：不建 WebAudio 图，deck 元素不抓进图，声音走 Gecko 的
+  标准媒体通路（USAGE_MEDIA → AudioService → 功放），与 APlayer 的 ExoPlayer 同路 → 车机滚轮
+  直接作用到功放。代价（开发者选项里已写明）：可视化退化为呼吸动画、均衡器/音效失效、
+  淡入淡出退化为硬切、自动混音不可用；关掉则保留完整 WebAudio 音效链。
+- **所有音量控件统一写入口**（新增 `services/userVolume.ts`）：系统音量模式下写 STREAM_MUSIC，
+  软件增益模式下写应用内档位。设置面板、控制栏、播放页、音乐墙工具、命令面板、方向盘音量键
+  全部走这一个出口——此前它们各写各的，一旦切到系统音量模式就会出现"某个滑杆拖了没反应"。
+  系统音量模式下应用内档位改为系统音量的镜像（原生 volume 事件回填），界面数字与车机实际档位一致。
+- 单测：nativeVolumeMode 11/11 通过（判据变更同步更新用例与 storeContract 快照）；tsc 零错误。
+- build.gradle: versionCode 29 / versionName 0.1.29。
+
+## 0.1.28（versionCode 28)
 
 - **车机滚轮音量仍不可控——加决定性诊断 + 两处真实断点加固**。用户实测 0.1.27：滚轮事件到达
   （`[CarKeys] native → volume` 随滚轮变化）、模式判定正确（`mode=fixed`）、APP 档位跟手

@@ -139,6 +139,7 @@ import { selectAudioSettingsSnapshot, useAudioSettingsStore } from './stores/use
 import { useNativeVolumeMirrorStore } from './stores/useNativeVolumeMirrorStore';
 import { systemVolumeGoverns } from './utils/nativeVolumeMode';
 import { isNativeAndroidShell } from './services/foliaExtensionBridge';
+import { systemVolumeOwnsOutput, writeUserVolume } from './services/userVolume';
 import { useSettingsModalStore } from './stores/useSettingsModalStore';
 import { audioBands, audioPower, bass, currentTime, lowMid, lyricCurrentTime, mid, spectrum, treble, vocal } from './stores/motionSignals';
 import { saveToCache } from './services/db';
@@ -442,7 +443,13 @@ export default function App() {
         volume,
         isMuted,
         handleToggleLoopMode,
+        nativePassthrough: nativePassthroughSetting,
     } = useAudioSettingsStore(useShallow(selectAudioSettingsSnapshot));
+    /**
+     * 直通模式（原生壳默认）：音频不接进 WebAudio 图，走标准媒体通路（照 APlayer）。
+     * 车机的音量联动认的是这条通路；音频被 WebAudio 捕获后滚轮拧不动。
+     */
+    const nativePassthrough = nativePassthroughSetting && isNativeAndroidShell();
     const {
         preventDisplaySleepDuringPlayback,
         wallpaperMode,
@@ -664,6 +671,12 @@ export default function App() {
             volumePreviewFrameRef.current = null;
             const nextVolume = pendingVolumePreviewRef.current;
             if (nextVolume !== null) {
+                // 系统音量模式（照 APlayer）：预览就写系统媒体音量，拖动时能直接听见。
+                // 网页增益此时恒 1，写它没有意义。
+                if (systemVolumeOwnsOutput()) {
+                    writeUserVolume(nextVolume);
+                    return;
+                }
                 syncOutputGain(nextVolume, 0.015);
             }
         });
@@ -1259,7 +1272,8 @@ export default function App() {
         currentSongKeyRef: currentSongRef,
         coverUrl,
         loopMode: effectiveLoopMode,
-        isEnabled: automixEnabled && !isNowPlayingStageActive,
+        // 直通模式没有 WebAudio 图，两只 deck 没有可混音的链路 → 自动混音整体停用。
+        isEnabled: automixEnabled && !isNowPlayingStageActive && !nativePassthrough,
         transition: transitionSettings,
         onAdvanceTrack: () => {
             // Same advance the end of a track would trigger, only early enough for the outgoing
@@ -1602,18 +1616,19 @@ export default function App() {
         applyOutputGain(ducked ? base * 0.2 : base, 0.05);
     }, [applyOutputGain, getTargetOutputGain]);
 
-    // 方向盘/车机音量键：固定音量车机上系统那一层是死的，直接改应用内音量。
+    // 方向盘/车机音量键：系统音量模式下它改的就是系统媒体音量（车机自己已经改过，
+    // 这里再写一次是幂等的）；软件增益模式下才改应用内档位。
     const handleNativeVolumeKey = useCallback((delta: number) => {
         const settings = useAudioSettingsStore.getState();
         if (settings.isMuted) settings.handleSetMuted(false);
         const next = Math.min(1, Math.max(0.02, settings.volume + delta));
-        settings.handleSetVolume(next);
+        writeUserVolume(next, { force: true });
     }, []);
 
     const handleNativeVolumeSet = useCallback((level: number) => {
         const settings = useAudioSettingsStore.getState();
         if (settings.isMuted && level > 0) settings.handleSetMuted(false);
-        settings.handleSetVolume(Math.min(1, Math.max(0.02, level)));
+        writeUserVolume(Math.min(1, Math.max(0.02, level)), { force: true });
     }, []);
 
     useNativeMediaShellBridge({
